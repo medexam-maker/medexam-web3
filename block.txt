@@ -1,0 +1,163 @@
+      {/* 3. Main View Switcher */}
+      <main className="flex-1">
+        {activeTab === 'home' && (
+          <HeroSection
+            onExploreCouncil={(councilId) => {
+              setSelectedCouncilForPage(councilId);
+              setActiveTab('specialties');
+            }}
+            onExploreSpecialties={() => {
+              setSelectedCouncilForPage('all');
+              setActiveTab('specialties');
+            }}
+          />
+        )}
+
+        {activeTab === 'specialties' && (
+          <SpecialtiesPage specialties={allSpecialties} councils={councilsState}
+            selectedCouncilId={selectedCouncilForPage}
+            onSelectCouncil={(cId) => setSelectedCouncilForPage(cId)}
+            onOpenExamsForSpecialty={(specId) => {
+              handleSelectSpecialty(specId);
+              setActiveTab('exams');
+            }}
+            onBackToHome={() => setActiveTab('home')}
+          />
+        )}
+
+        {activeTab === 'exams' && (
+          <ExamsPage specialties={allSpecialties}
+            specialtyId={activeSpecialtyId}
+            currentUser={currentUser}
+            questions={questions}
+            onStartExam={(mode) => {
+              setExamInitialMode(mode);
+              setExamAutoStart(true);
+              setActiveTab('exam');
+            }}
+            onOpenSubscribeModal={() => setIsSubscribeModalOpen(true)}
+            onOpenAuthModal={handleOpenAuthModal}
+            onBackToSpecialties={() => setActiveTab('specialties')}
+          />
+        )}
+
+        {activeTab === 'blog' && (
+          <BlogSection
+            onBackToHome={() => setActiveTab('home')}
+          />
+        )}
+
+        {activeTab === 'exam' && (
+          <ExamSimulator siteSettings={siteSettings} specialties={allSpecialties}
+            specialtyId={activeSpecialtyId}
+            questions={questions}
+            currentUser={currentUser}
+            initialMode={examInitialMode}
+            autoStart={examAutoStart}
+            onOpenSpecialtyModal={() => setIsSpecialtyModalOpen(true)}
+            onOpenSubscribeModal={() => setIsSubscribeModalOpen(true)}
+            onBackToHome={() => {
+              setExamAutoStart(false);
+              setActiveTab('home');
+            }}
+          />
+        )}
+
+        {/* 3. DEDICATED SPECIALTY EXAMINEES CHAT VIEW (Contains candidates of current specialty ONLY) */}
+        {activeTab === 'chat' && (
+          <div className="max-w-4xl mx-auto px-4 py-8">
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm text-right space-y-6">
+              
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 font-bold">
+                    <Users className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                      قروب ممتحني ({currentSpecialty.titleAr})
+                      <span className="bg-emerald-100 text-emerald-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
+                        نشط الآن
+                      </span>
+                    </h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      مساحة حصرية ومخصصة لمرشحي وممتحني تخصص ({currentSpecialty.titleAr}) فقط للتواصل والتبادل العلمي
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setIsSpecialtyModalOpen(true)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-800 px-3.5 py-2 rounded-xl text-xs font-bold border border-slate-200 transition-colors"
+                >
+                  تغيير التخصص ({currentSpecialty.titleAr})
+                </button>
+              </div>
+
+              {/* Specialty Chat Instructions Card */}
+              <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-5 space-y-3">
+                <h3 className="font-bold text-sm text-emerald-900 flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-emerald-600" />
+                  أهلاً بك في الملتقى العلمي التفاعلي لممتحني {currentSpecialty.titleAr}
+                </h3>
+                <p className="text-xs text-emerald-800 leading-relaxed">
+                  هذا التجمّع مخصص حائرياً لممتحني قسم <strong className="text-emerald-900 font-bold">{currentSpecialty.titleAr}</strong>. يمكنك مناقشة الأسئلة الطبية الصعبة، مشاركة الصور والمستندات بتركيز تام على تخصصك بدون تشتت مع التخصصات الأخرى.
+                </p>
+                
+                <div className="pt-2 flex flex-wrap gap-2 text-[11px] font-bold text-emerald-900">
+                  <span className="bg-white px-3 py-1 rounded-lg border border-emerald-200">• دعم إرسال الصور والمستندات حتى 50MB</span>
+                  <span className="bg-white px-3 py-1 rounded-lg border border-emerald-200">• حماية خصوصية البيانات والتنقية الآلية 04:00 ص</span>
+                </div>
+              </div>
+
+              {/* Embedded Chat Widget for current specialty */}
+              <div className="pt-2">
+                <SubscriberChat currentSpecialtyTitle={currentSpecialty.titleAr} />
+              </div>
+
+              <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                <button
+                  onClick={() => setActiveTab('home')}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-5 py-2.5 rounded-xl text-xs transition-colors"
+                >
+                  الرجوع للرئيسية
+                </button>
+                <button
+                  onClick={() => {
+                    if (!currentUser) {
+                      handleOpenAuthModal('signup');
+                      return;
+                    }
+                    const isSubscribedNow = currentUser.isSubscribed && currentUser.subscriptionStatus === 'active';
+                    if (!isSubscribedNow) {
+                      setIsSubscribeModalOpen(true);
+                      return;
+                    }
+                    setExamInitialMode('STUDENT_TRAINING'); // الامتحان التدريبي الرئيسي الكامل (50 سؤال)
+                    setExamAutoStart(true);     // يبدأ مباشرة بدون شاشة اختيار وضع
+                    setActiveTab('exam');
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-2.5 rounded-xl text-xs shadow-md shadow-emerald-200 transition-colors"
+                >
+                  {!currentUser
+                    ? 'سجّل الآن لبدء الامتحان'
+                    : (currentUser.isSubscribed && currentUser.subscriptionStatus === 'active')
+                      ? `بدء الامتحان الرسمي (${currentSpecialty.titleAr})`
+                      : 'اشترك الآن لفتح الامتحان الرسمي'}
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'admin' && (
+          <AdminPanel specialties={allSpecialties} plans={plansState} siteSettings={siteSettings}
+            onUpdateSettings={handleUpdateSettings}
+            councilsState={councilsState}
+            onUpdateCouncils={handleUpdateCouncils}
+            onBackToHome={() => setActiveTab('home')}
+          />
+        )}
+      </main>
+
