@@ -1,0 +1,110 @@
+name: Build Android Dist
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Commit SHA to build'
+        required: true
+        default: 'a441ec7d'
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify Exact Source Commit
+        id: verify_commit
+        run: |
+          EXPECTED_FULL_SHA=$(git rev-parse --verify "${{ inputs.commit_sha }}^{commit}")
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          
+          echo "Expected: $EXPECTED_FULL_SHA"
+          echo "Actual:   $ACTUAL_SHA"
+          
+          if [ "$EXPECTED_FULL_SHA" != "$ACTUAL_SHA" ]; then
+            echo "Error: EXPECTED_FULL_SHA does not match ACTUAL_SHA"
+            exit 1
+          fi
+          
+          echo "EXPECTED_FULL_SHA=$EXPECTED_FULL_SHA" >> $GITHUB_ENV
+          echo "ACTUAL_SHA=$ACTUAL_SHA" >> $GITHUB_ENV
+
+      - name: Check API Configuration
+        run: |
+          if [ -z "${{ vars.VITE_API_BASE_URL }}" ]; then
+            echo "Error: VITE_API_BASE_URL repository variable is missing or empty."
+            exit 1
+          fi
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Android Dist
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          ANDROID_BUILD: 'true'
+        run: npm run build
+
+      - name: Verify build-info.json
+        run: |
+          if [ ! -f "dist/build-info.json" ]; then
+            echo "Error: dist/build-info.json does not exist."
+            exit 1
+          fi
+          
+          BUILD_SHA=$(node -p "require('./dist/build-info.json').commitHash")
+          echo "Build SHA: $BUILD_SHA"
+          
+          if [ -z "$BUILD_SHA" ] || [ "$BUILD_SHA" == "unknown" ]; then
+            echo "Error: BUILD_SHA is missing or unknown."
+            exit 1
+          fi
+          
+          if [ "$BUILD_SHA" != "${{ env.ACTUAL_SHA }}" ] || [ "$BUILD_SHA" != "${{ env.EXPECTED_FULL_SHA }}" ]; then
+            echo "Error: Invariant failed. EXPECTED_FULL_SHA == ACTUAL_SHA == BUILD_SHA is not true."
+            exit 1
+          fi
+          
+          echo "BUILD_SHA=$BUILD_SHA" >> $GITHUB_ENV
+
+      - name: Prepare Artifact Directory
+        run: |
+          mkdir -p android-dist-temp
+          cp -a dist/. android-dist-temp/
+          
+          # Remove only the known backend artifacts
+          rm -f android-dist-temp/server.cjs
+          rm -f android-dist-temp/server.cjs.map
+          
+          # Ensure build-info.json is preserved
+          if [ ! -f "android-dist-temp/build-info.json" ]; then
+            echo "Error: build-info.json was lost during artifact preparation."
+            exit 1
+          fi
+          
+          # Create metadata.txt
+          cat <<EOF > android-dist-temp/metadata.txt
+          sourceCommit=${{ env.EXPECTED_FULL_SHA }}
+          buildCommit=${{ env.ACTUAL_SHA }}
+          buildInfoCommit=${{ env.BUILD_SHA }}
+          buildMode=ANDROID_BUILD
+          buildTimestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          EOF
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web3-dist-${{ inputs.commit_sha }}
+          path: android-dist-temp/
+          if-no-files-found: error
