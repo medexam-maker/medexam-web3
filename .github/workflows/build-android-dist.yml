@@ -83,6 +83,40 @@ jobs:
           rm -rf dist
           npm run build
 
+      - name: Verify API URL in Compiled Output
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          if [ -z "$VITE_API_BASE_URL" ]; then
+            echo "FAIL: VITE_API_BASE_URL is missing in verification step."
+            exit 1
+          fi
+          
+          LENGTH=${#VITE_API_BASE_URL}
+          echo "Diagnostic: API variable is present."
+          echo "Diagnostic: Length is $LENGTH characters."
+          
+          if ! ls dist/assets/*.js >/dev/null 2>&1; then
+            echo "FAIL: No JavaScript files found in dist/assets/."
+            exit 1
+          fi
+          
+          MATCH_COUNT=0
+          for file in dist/assets/*.js; do
+            if grep -F -q "$VITE_API_BASE_URL" "$file"; then
+              MATCH_COUNT=$((MATCH_COUNT + 1))
+            fi
+          done
+          
+          echo "Diagnostic: Found matching JS files: $MATCH_COUNT"
+          
+          if [ "$MATCH_COUNT" -gt 0 ]; then
+            echo "PASS: Exact API URL found in frontend bundle."
+          else
+            echo "FAIL: Exact API URL was not found in frontend bundle."
+            exit 1
+          fi
+
       - name: Verify build-info.json and Three-way SHA Match
         run: |
           if [ ! -f "dist/build-info.json" ]; then
