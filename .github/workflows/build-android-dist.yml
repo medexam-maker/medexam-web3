@@ -2,11 +2,6 @@ name: Build Android Dist
 
 on:
   workflow_dispatch:
-    inputs:
-      commit_sha:
-        description: 'Commit SHA to build'
-        required: true
-        default: 'a441ec7d'
 
 jobs:
   build-and-verify:
@@ -15,30 +10,47 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.commit_sha }}
+          ref: 'main'
           fetch-depth: 0
+
+      - name: Resolve and Pin Latest Main SHA
+        id: resolve_sha
+        run: |
+          # Fetch the absolute latest from origin main
+          git fetch origin main
+          
+          EXPECTED_FULL_SHA=$(git rev-parse origin/main)
+          
+          echo "Resolved origin/main to: $EXPECTED_FULL_SHA"
+          
+          # Validate 40-character hex string
+          if ! [[ "$EXPECTED_FULL_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Error: Resolved SHA is not a valid 40-character hex string: $EXPECTED_FULL_SHA"
+            exit 1
+          fi
+          
+          # Export EXPECTED_FULL_SHA to environment
+          echo "EXPECTED_FULL_SHA=$EXPECTED_FULL_SHA" >> $GITHUB_ENV
+          
+          # Pin the workspace exactly to this SHA
+          git checkout $EXPECTED_FULL_SHA
+          
+          # Verify the working tree is on the exact SHA
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          echo "Checked out Actual SHA: $ACTUAL_SHA"
+          
+          if [ "$EXPECTED_FULL_SHA" != "$ACTUAL_SHA" ]; then
+            echo "Error: EXPECTED_FULL_SHA ($EXPECTED_FULL_SHA) does not match ACTUAL_SHA ($ACTUAL_SHA)"
+            exit 1
+          fi
+          
+          # Export ACTUAL_SHA to environment
+          echo "ACTUAL_SHA=$ACTUAL_SHA" >> $GITHUB_ENV
 
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Verify Exact Source Commit
-        id: verify_commit
-        run: |
-          EXPECTED_FULL_SHA=$(git rev-parse --verify "${{ inputs.commit_sha }}^{commit}")
-          ACTUAL_SHA=$(git rev-parse HEAD)
-          
-          echo "Expected: $EXPECTED_FULL_SHA"
-          echo "Actual:   $ACTUAL_SHA"
-          
-          if [ "$EXPECTED_FULL_SHA" != "$ACTUAL_SHA" ]; then
-            echo "Error: EXPECTED_FULL_SHA does not match ACTUAL_SHA"
-            exit 1
-          fi
-          
-          echo "EXPECTED_FULL_SHA=$EXPECTED_FULL_SHA" >> $GITHUB_ENV
-          echo "ACTUAL_SHA=$ACTUAL_SHA" >> $GITHUB_ENV
 
       - name: Check API Configuration
         run: |
@@ -54,9 +66,11 @@ jobs:
         env:
           VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
           ANDROID_BUILD: 'true'
-        run: npm run build
+        run: |
+          rm -rf dist
+          npm run build
 
-      - name: Verify build-info.json
+      - name: Verify build-info.json and Three-way SHA Match
         run: |
           if [ ! -f "dist/build-info.json" ]; then
             echo "Error: dist/build-info.json does not exist."
@@ -71,8 +85,9 @@ jobs:
             exit 1
           fi
           
+          # Three-way equality check
           if [ "$BUILD_SHA" != "${{ env.ACTUAL_SHA }}" ] || [ "$BUILD_SHA" != "${{ env.EXPECTED_FULL_SHA }}" ]; then
-            echo "Error: Invariant failed. EXPECTED_FULL_SHA == ACTUAL_SHA == BUILD_SHA is not true."
+            echo "Error: Invariant failed. EXPECTED_FULL_SHA (${{ env.EXPECTED_FULL_SHA }}) == ACTUAL_SHA (${{ env.ACTUAL_SHA }}) == BUILD_SHA ($BUILD_SHA) is not true."
             exit 1
           fi
           
@@ -105,6 +120,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: web3-dist-${{ inputs.commit_sha }}
+          name: android-dist-${{ env.EXPECTED_FULL_SHA }}
           path: android-dist-temp/
           if-no-files-found: error
