@@ -62,10 +62,21 @@ export const MockProctorWidget: React.FC<MockProctorWidgetProps> = ({
         setHasCameraPermission(true);
       } else {
         setHasCameraPermission(false);
+        setWarningMessage("الكاميرا غير مدعومة في هذا المتصفح.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn("Camera/Mic permission denied or unavailable:", err);
       setHasCameraPermission(false);
+      
+      let errorMessage = "حدث خطأ أثناء الوصول للكاميرا.";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        errorMessage = "تم رفض صلاحية الوصول للكاميرا والمايكروفون. يرجى تفعيلها من إعدادات المتصفح.";
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        errorMessage = "لم يتم العثور على كاميرا أو مايكروفون.";
+      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+        errorMessage = "الكاميرا مستخدمة حالياً بواسطة تطبيق آخر.";
+      }
+      setWarningMessage(errorMessage);
     }
   };
 
