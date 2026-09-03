@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Building2, 
@@ -10,7 +10,9 @@ import {
   BookOpen,
   Award,
   CheckCircle2,
-  Search
+  Search,
+  Download,
+  Download
 } from 'lucide-react';
 
 const SearchComponent = () => {
@@ -60,10 +62,26 @@ interface HeroSectionProps {
   onExploreSpecialties: () => void;
 }
 
+import { resolveApiPath } from '../services/platform';
 export const HeroSection: React.FC<HeroSectionProps> = ({
+
   onExploreCouncil,
   onExploreSpecialties
+
 }) => {
+  const [latestApk, setLatestApk] = useState<any>(null);
+  
+  useEffect(() => {
+    fetch(resolveApiPath('/api/app/latest'))
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.release) {
+          setLatestApk(data.release);
+        }
+      })
+      .catch(err => console.error('Error fetching latest APK:', err));
+  }, []);
+
   return (
     <div className="dir-rtl font-sans text-slate-800" dir="rtl">
       
@@ -89,6 +107,19 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           <div className="pt-8">
             <SearchComponent />
           </div>
+
+          {latestApk && (
+            <div className="pt-4 flex justify-center animate-fade-in">
+              <a
+                href={latestApk.download_url}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-6 rounded-2xl flex items-center justify-center gap-3 transition-colors shadow-lg hover:shadow-xl w-full sm:w-auto"
+              >
+                <Download className="w-5 h-5" />
+                <span>تحميل التطبيق للأندرويد (v{latestApk.version})</span>
+              </a>
+            </div>
+          )}
+
 
         </div>
       </section>

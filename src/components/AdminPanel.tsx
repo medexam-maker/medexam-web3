@@ -1,4 +1,5 @@
-import { resolveApiPath } from "../services/platform";
+import {
+  Smartphone, resolveApiPath } from "../services/platform";
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
@@ -81,6 +82,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [blogPosts, setBlogPosts] = useState<any[]>([]);
 
+  const [androidReleases, setAndroidReleases] = useState<any[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [pendingSubs, setPendingSubs] = useState<SubscriptionRequest[]>([]);
   const [generatedCodes, setGeneratedCodes] = useState<PromoCode[]>([]);
@@ -173,13 +175,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const loadAdminData = async () => {
     setIsRefreshing(true);
     try {
-      const [qRes, sRes, stRes, spRes, prRes] = await Promise.all([
-        authFetch('/api/questions'),
-        authFetch('/api/subscriptions/pending'),
-        authFetch('/api/admin/stats'),
-        authFetch('/api/specialties/status'),
-        authFetch('/api/proctoring/reports')
-      ]);
+      const [qRes, sRes, stRes, spRes, prRes, arRes] = await Promise.all([
+         authFetch('/api/questions'),
+         authFetch('/api/subscriptions/pending'),
+         authFetch('/api/admin/stats'),
+         authFetch('/api/specialties/status'),
+         authFetch('/api/proctoring/reports'),
+         authFetch('/api/admin/releases')
+       ]);
 
       if (qRes.ok) setQuestions(await qRes.json());
       if (sRes.ok) setPendingSubs(await sRes.json());
@@ -188,6 +191,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const spData = await spRes.json();
         if (spData && spData.statusMap) {
           setSpecialtiesStatusMap(spData.statusMap);
+        }
+      }
+      if (arRes && arRes.ok) {
+        const arData = await arRes.json();
+        if (arData && arData.releases) {
+          setAndroidReleases(arData.releases);
         }
       }
       if (prRes.ok) {
@@ -1216,6 +1225,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <Settings className="w-4 h-4 text-teal-600" />
           <span>تخصيص الواجهة والإعلانات</span>
         </button>
+         <button
+           onClick={() => setActiveTab('releases')}
+           className={`flex-1 min-w-[140px] py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 ${
+             activeTab === 'releases' ? 'bg-white text-emerald-800 shadow-xs border border-slate-200 font-bold' : 'text-slate-600 hover:text-slate-900'
+           }`}
+         >
+           <Smartphone className="w-4 h-4 text-emerald-600" />
+           <span>Android Releases</span>
+         </button>
+
         <button
           onClick={() => setActiveTab('seo_settings')}
           className={`flex-1 min-w-[140px] py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 ${

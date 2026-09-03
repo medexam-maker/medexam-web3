@@ -15,6 +15,7 @@ import {
   UserPlus,
   LogIn,
   LogOut,
+  Download,
   Building2,
   Newspaper
 } from 'lucide-react';
@@ -235,6 +236,22 @@ export const Header: React.FC<HeaderProps> = ({
             {/* Menu Links List */}
             <div className="p-4 space-y-1 overflow-y-auto flex-1 font-bold text-xs">
               
+              {/* Update Check Callout */}
+
+              <div className="flex items-center gap-2 mb-3">
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    // Emit a custom event or you can just add UpdateChecker with manualCheck globally
+                    window.dispatchEvent(new CustomEvent('TRIGGER_UPDATE_CHECK'));
+                  }}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 p-2.5 rounded-xl flex items-center justify-center gap-1.5 font-bold shadow-2xs"
+                >
+                  <Download className="w-4 h-4 text-slate-600" />
+                  <span>Check for Updates</span>
+                </button>
+              </div>
+
               {/* Login Callout in Drawer */}
               {!currentUser ? (
                 <div className="flex items-center gap-2 mb-3">

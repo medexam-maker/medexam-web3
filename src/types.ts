@@ -255,3 +255,14 @@ export interface AdminStats {
   activeSubscribers: number;
 }
 
+
+export interface AndroidRelease {
+  id: string;
+  version: string;
+  download_url: string;
+  sha256: string;
+  file_size: number;
+  release_notes: string;
+  is_published: boolean;
+  created_at: string;
+}

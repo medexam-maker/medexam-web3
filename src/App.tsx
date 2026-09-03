@@ -1,3 +1,4 @@
+import { UpdateChecker } from './components/UpdateChecker';
 import React, { useState, useEffect, useRef } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { CouncilPage, SpecialtyPage, SectionPage, NewsPage } from './components/SeoPages';
