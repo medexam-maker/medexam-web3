@@ -84,9 +84,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     formData.append('is_published', releaseForm.is_published.toString());
 
     try {
-      const res = await fetch(resolveApiPath('/api/admin/releases'), {
+      const res = await authFetch('/api/admin/releases', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: formData
       });
       const data = await res.json();
@@ -108,10 +107,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleTogglePublishRelease = async (id: string, currentStatus: boolean) => {
     try {
-      const res = await fetch(resolveApiPath(`/api/admin/releases/${id}`), {
+      const res = await authFetch(`/api/admin/releases/${id}`, {
         method: 'PUT',
         headers: { 
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ is_published: !currentStatus })
@@ -125,9 +123,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleDeleteRelease = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this release?')) return;
     try {
-      const res = await fetch(resolveApiPath(`/api/admin/releases/${id}`), {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      const res = await authFetch(`/api/admin/releases/${id}`, {
+        method: 'DELETE'
       });
       if (res.ok) fetchReleases();
     } catch (err) {
