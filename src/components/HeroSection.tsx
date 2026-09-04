@@ -1,19 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Building2, 
-  TestTube, 
-  Stethoscope, 
-  GraduationCap, 
-  ChevronLeft, 
-  Sparkles,
-  BookOpen,
-  Award,
-  CheckCircle2,
-  Search,
-  Download,
-  Download
-} from 'lucide-react';
+import { Building2, TestTube, Stethoscope, GraduationCap, ChevronLeft, Sparkles, BookOpen, Award, CheckCircle2, Search, Download } from 'lucide-react';
 
 const SearchComponent = () => {
   const [isOpen, setIsOpen] = useState(false);

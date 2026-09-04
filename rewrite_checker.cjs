@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react';
+const fs = require('fs');
+
+const code = `import React, { useEffect, useState } from 'react';
 import { App } from '@capacitor/app';
 import { resolveApiPath, isNativeMobileApp } from '../services/platform';
 import { Download, X } from 'lucide-react';
@@ -163,3 +165,7 @@ export const UpdateChecker: React.FC<{ manualCheck?: boolean; onCheckComplete?: 
     </div>
   );
 };
+`;
+
+fs.writeFileSync('src/components/UpdateChecker.tsx', code);
+console.log('UpdateChecker rewritten');

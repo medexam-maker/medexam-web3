@@ -5881,7 +5881,7 @@ app.post('/api/upload-image', requireAdmin, upload.single('image'), async (req, 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const fileExt = file.originalname.split('.').pop();
     const fileName = `admin/${questionId}_${Date.now()}.${fileExt}`;
-    const bucketName = 'question_images';
+    const bucketName = 'apks';
     
     const { data, error } = await supabase.storage
       .from(bucketName)
@@ -6126,7 +6126,7 @@ app.post('/api/admin/releases', requireAdmin, apkUpload.single('apk'), async (re
     
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const fileName = `apk/MedExam_${version.replace(/[^a-zA-Z0-9.-]/g, '_')}_${Date.now()}.apk`;
-    const bucketName = 'question_images'; // reusing existing bucket since no new one is guaranteed to exist
+    const bucketName = 'apks';
     
     const { data, error } = await supabase.storage
       .from(bucketName)

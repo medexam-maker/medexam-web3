@@ -316,6 +316,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans dir-rtl selection:bg-emerald-500 selection:text-white flex flex-col" dir="rtl">
       
+      <UpdateChecker />
       {/* 1. Top Council Notice Marquee Ticker (Hidden during exam mode) */}
       {activeTab !== 'exam' && <NoticeTicker notices={notices} />}
 
