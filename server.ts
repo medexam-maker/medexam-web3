@@ -5881,7 +5881,7 @@ app.post('/api/upload-image', requireAdmin, upload.single('image'), async (req, 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     const fileExt = file.originalname.split('.').pop();
     const fileName = `admin/${questionId}_${Date.now()}.${fileExt}`;
-    const bucketName = 'apks';
+    const bucketName = 'question_images';
     
     const { data, error } = await supabase.storage
       .from(bucketName)
