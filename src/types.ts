@@ -103,6 +103,8 @@ export interface UserAccount {
 }
 
 export interface SiteSettings {
+  drSamiEnabled?: boolean;
+  chatStatusMap?: Record<string, boolean>;
   demoQuestionLimit?: number;
   examQuestionCount?: number;
   examTimerSeconds?: number;

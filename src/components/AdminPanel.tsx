@@ -2,7 +2,7 @@ import { resolveApiPath } from "../services/platform";
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
-import { ShieldCheck, Plus, Trash2, Edit3, Check, X, Key, FileText, Users, Award, Copy, Sparkles, BookOpen, Settings, Upload, Layers, FileSpreadsheet, Download, Building2, CheckCircle2, Bell, Mail, RefreshCw, Eye, Send, Clock, Phone, UserCheck, AlertCircle, FileUp, FileCheck2, AlertOctagon, Info, BarChart, Activity, Database, Globe, Smartphone } from 'lucide-react';
+import { ShieldCheck, Plus, Trash2, Edit3, Check, X, Key, FileText, Users, Award, Copy, Sparkles, BookOpen, Settings, Upload, Layers, FileSpreadsheet, Download, Building2, CheckCircle2, Bell, Mail, RefreshCw, Eye, Send, Clock, Phone, UserCheck, AlertCircle, FileUp, FileCheck2, AlertOctagon, Info, BarChart, Activity, Database, Globe, Smartphone, Bot, MessageSquare, Lock } from 'lucide-react';
 import { Question, SubscriptionRequest, PromoCode, AdminStats, SpecialtyId, CouncilId, SiteSettings, CouncilInfo } from '../types';
 import { DEFAULT_SITE_SETTINGS } from '../data/mockData';
 import { authFetch } from '../lib/authFetch';
@@ -55,9 +55,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const fetchReleases = async () => {
     try {
-      const res = await fetch(resolveApiPath('/api/admin/releases'), {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-      });
+      const res = await authFetch('/api/admin/releases');
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.releases) setAndroidReleases(data.releases);
@@ -982,6 +980,58 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     if (onUpdateCouncils) {
       onUpdateCouncils(updatedCouncils);
+    }
+  };
+
+  useEffect(() => {
+    if (siteSettings) {
+      setUiForm(siteSettings);
+    }
+  }, [siteSettings]);
+
+  // Toggle Dr. Sami AI Globally
+  const handleToggleDrSami = (enabled: boolean) => {
+    const updated = {
+      ...uiForm,
+      drSamiEnabled: enabled
+    };
+    setUiForm(updated);
+    if (onUpdateSettings) {
+      onUpdateSettings(updated);
+    }
+  };
+
+  // Toggle Chat for a Council
+  const handleToggleCouncilChat = (councilId: string, currentActive: boolean) => {
+    const nextState = !currentActive;
+    const updatedMap = {
+      ...(uiForm.chatStatusMap || {}),
+      [`council:${councilId}`]: nextState
+    };
+    const updated = {
+      ...uiForm,
+      chatStatusMap: updatedMap
+    };
+    setUiForm(updated);
+    if (onUpdateSettings) {
+      onUpdateSettings(updated);
+    }
+  };
+
+  // Toggle Chat for a Specialty
+  const handleToggleSpecialtyChat = (specialtyId: string, currentActive: boolean) => {
+    const nextState = !currentActive;
+    const updatedMap = {
+      ...(uiForm.chatStatusMap || {}),
+      [`specialty:${specialtyId}`]: nextState
+    };
+    const updated = {
+      ...uiForm,
+      chatStatusMap: updatedMap
+    };
+    setUiForm(updated);
+    if (onUpdateSettings) {
+      onUpdateSettings(updated);
     }
   };
 
@@ -2195,6 +2245,40 @@ Reference: Oxford Handbook of Clinical Medicine`}
                   <h4 className="text-lg font-bold text-slate-900 mb-2">{council.titleAr}</h4>
                   <p className="text-xs text-slate-500 mb-4 leading-relaxed">{council.description}</p>
 
+                  {/* Council Chat Scope Controller */}
+                  {(() => {
+                    const councilChatKey = `council:${council.id}`;
+                    const isCouncilChatOn = uiForm.chatStatusMap ? uiForm.chatStatusMap[councilChatKey] !== false : true;
+                    return (
+                      <div className="mb-4 p-3 rounded-xl border flex items-center justify-between transition-colors bg-slate-50 border-slate-200">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>محادثة المجلس (Chat):</span>
+                            <span className={isCouncilChatOn ? 'text-emerald-700 font-bold' : 'text-rose-600 font-bold'}>
+                              {isCouncilChatOn ? 'مفعلة ✓' : 'معطلة ✗'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            {isCouncilChatOn ? 'متاحة لجميع أقسام هذا المجلس' : 'معطلة بالكامل لجميع أقسام هذا المجلس'}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleCouncilChat(council.id, isCouncilChatOn)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shrink-0 shadow-2xs ${
+                            isCouncilChatOn
+                              ? 'bg-rose-100 hover:bg-rose-200 text-rose-800'
+                              : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
+                          }`}
+                        >
+                          {isCouncilChatOn ? 'إيقاف المحادثة' : 'تفعيل المحادثة'}
+                        </button>
+                      </div>
+                    );
+                  })()}
+
                   <div className="space-y-2">
                     <div className="text-[11px] font-bold text-slate-700 mb-1">الأقسام التابعة حالياً:</div>
                     {council.departments.map((dept) => (
@@ -2311,6 +2395,50 @@ Reference: Oxford Handbook of Clinical Medicine`}
 
           <form onSubmit={handleSaveUiSettings} className="space-y-4 text-xs">
             
+            {/* Dr. Sami Global Control */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <span className="text-sm font-bold text-slate-900">المستشار الطبي الذكي (د. سامي AI)</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    uiForm.drSamiEnabled !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                  }`}>
+                    {uiForm.drSamiEnabled !== false ? 'مفعل عاماً ✓' : 'معطل عاماً ✗'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  التحكم الشامل في ظهور وعمل د. سامي لكافة المستخدمين. عند التعطيل، تحجب الواجهة ويرفض الخادم أية استدعاءات لمنع استهلاك الذكاء الاصطناعي.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handleToggleDrSami(uiForm.drSamiEnabled === false ? true : false)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-xs shrink-0 ${
+                  uiForm.drSamiEnabled !== false
+                    ? 'bg-rose-500 hover:bg-rose-600 text-white'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}
+              >
+                {uiForm.drSamiEnabled !== false ? 'تعطيل د. سامي' : 'تفعيل د. سامي'}
+              </button>
+            </div>
+
+            {/* Chat Scopes Status Summary */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-emerald-600" />
+                  <span className="text-sm font-bold text-slate-900">غرف محادثات المشتركين (Subscriber Chat)</span>
+                </div>
+                <span className="text-[11px] text-slate-500">التحكم بالمجالس والأقسام</span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                يمكنك التحكم الفوري في تشغيل أو إيقاف المحادثة لأي مجلس عبر تبويب <strong>"المجالس الطبية"</strong>، أو لأي تخصص طبي منفرد عبر تبويب <strong>"التخصصات والأقسام"</strong>.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pb-4 border-b border-slate-100">
               <div>
                 <label className="block text-slate-700 font-bold mb-1">أسئلة الامتحان التجريبي</label>
@@ -2669,6 +2797,44 @@ Reference: Oxford Handbook of Clinical Medicine`}
                   </div>
 
                   <p className="text-[11px] text-slate-600 line-clamp-2">{spec.description}</p>
+
+                  {/* Chat Scope Toggle for this Specialty */}
+                  {(() => {
+                    const councilChatKey = `council:${spec.councilId}`;
+                    const isCouncilChatOn = uiForm.chatStatusMap ? uiForm.chatStatusMap[councilChatKey] !== false : true;
+                    const specChatKey = `specialty:${spec.id}`;
+                    const isSpecChatExplicitlyOff = uiForm.chatStatusMap && uiForm.chatStatusMap[specChatKey] === false;
+                    const isEffectiveOn = isCouncilChatOn && !isSpecChatExplicitlyOff;
+
+                    return (
+                      <div className="p-2.5 bg-white/90 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
+                        <div className="space-y-0.5">
+                          <div className="font-bold text-slate-800 flex items-center gap-1">
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>محادثة القسم:</span>
+                            <span className={isEffectiveOn ? 'text-emerald-700 font-bold' : 'text-rose-600 font-bold'}>
+                              {isEffectiveOn ? 'مفعلة ✓' : !isCouncilChatOn ? 'معطلة (بسبب المجلس)' : 'معطلة (بقرار مخصص)'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            المجلس: {spec.councilId}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSpecialtyChat(spec.id, isEffectiveOn)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors shrink-0 shadow-2xs ${
+                            isEffectiveOn
+                              ? 'bg-rose-100 hover:bg-rose-200 text-rose-800'
+                              : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
+                          }`}
+                        >
+                          {isEffectiveOn ? 'تعطيل المحادثة' : 'تشغيل المحادثة'}
+                        </button>
+                      </div>
+                    );
+                  })()}
 
                   <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between">
                     <span className="text-[11px] text-slate-500">حالة القسم للطلاب:</span>

@@ -22,16 +22,26 @@ import {
   ArrowUpRight,
   ArrowUpLeft,
   ArrowDownRight,
-  ArrowDownLeft
+  ArrowDownLeft,
+  ShieldAlert,
+  Lock
 } from 'lucide-react';
 import { ChatMessage } from '../types';
 import { authFetch } from '../lib/authFetch';
 
 interface SubscriberChatProps {
   currentSpecialtyTitle: string;
+  specialtyId?: string;
+  councilId?: string;
+  chatStatusMap?: Record<string, boolean>;
 }
 
-export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialtyTitle }) => {
+export const SubscriberChat: React.FC<SubscriberChatProps> = ({ 
+  currentSpecialtyTitle,
+  specialtyId,
+  councilId,
+  chatStatusMap
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
@@ -42,6 +52,17 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
     size: string;
     url: string;
   } | null>(null);
+
+  const [isChatDisabled, setIsChatDisabled] = useState(false);
+  const [disabledMessage, setDisabledMessage] = useState<string | null>(null);
+
+  // Evaluate scope disabled status from settings (if provided)
+  const isScopeDisabled = Boolean(
+    (specialtyId && councilId && chatStatusMap) &&
+    (chatStatusMap[`council:${councilId}`] === false || chatStatusMap[`specialty:${specialtyId}`] === false)
+  );
+
+  const chatDisabledEffective = isChatDisabled || isScopeDisabled;
 
   // Free movement / Dragging position state
   // Default corner is bottom-right (bottom: 20px, right: 20px)
@@ -147,17 +168,28 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
 
   // Fetch initial chat messages
   const fetchMessages = async () => {
+    if (chatDisabledEffective) return;
     try {
       let url = '/api/chat/messages';
       const params = new URLSearchParams();
-      
+      if (specialtyId) params.append('specialtyId', specialtyId);
       if (lastTimestampRef.current) params.append('since', lastTimestampRef.current);
       
       const queryStr = params.toString();
       if (queryStr) url += '?' + queryStr;
 
       const res = await authFetch(url);
+      if (res.status === 403) {
+        const data = await res.json().catch(() => null);
+        if (data && (data.disabled || data.code === 'CHAT_DISABLED')) {
+          setIsChatDisabled(true);
+          setDisabledMessage(data.error || 'غرفة المحادثة معطلة حالياً بقرار من إدارة المنصة');
+          return;
+        }
+      }
       if (res.ok) {
+        setIsChatDisabled(false);
+        setDisabledMessage(null);
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           setMessages(prev => {
@@ -173,7 +205,7 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
   };
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || chatDisabledEffective) return;
 
     // Fetch immediately when chat bubble is opened
     if (document.visibilityState === 'visible') {
@@ -183,7 +215,7 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
     let intervalId: NodeJS.Timeout | null = null;
 
     const startPolling = () => {
-      if (!intervalId && document.visibilityState === 'visible') {
+      if (!intervalId && document.visibilityState === 'visible' && !chatDisabledEffective) {
         intervalId = setInterval(fetchMessages, 35000); // 35s interval while open
       }
     };
@@ -196,7 +228,7 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && !chatDisabledEffective) {
         fetchMessages();
         startPolling();
       } else {
@@ -211,7 +243,7 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isOpen]);
+  }, [isOpen, chatDisabledEffective]);
 
   useEffect(() => {
     if (isOpen) {
@@ -255,23 +287,34 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
   // Send message
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (chatDisabledEffective) return;
     if (!newMessage.trim() && !selectedFile) return;
 
     setIsLoading(true);
     try {
-      const payload = {
+      const payload: any = {
         senderName: senderName || 'طبيب متدرب',
         senderRole: 'طبيب متدرب',
         senderSpecialty: currentSpecialtyTitle,
         message: newMessage.trim(),
         attachment: selectedFile || undefined
       };
+      if (specialtyId) payload.specialtyId = specialtyId;
 
       const res = await authFetch('/api/chat/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+
+      if (res.status === 403) {
+        const data = await res.json().catch(() => null);
+        if (data && (data.disabled || data.code === 'CHAT_DISABLED')) {
+          setIsChatDisabled(true);
+          setDisabledMessage(data.error || 'غرفة المحادثة معطلة حالياً بقرار من إدارة المنصة');
+          return;
+        }
+      }
 
       if (res.ok) {
         const createdMsg = await res.json();
@@ -534,53 +577,65 @@ export const SubscriberChat: React.FC<SubscriberChatProps> = ({ currentSpecialty
             </div>
           )}
 
-          {/* Chat Form Input */}
-          <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-slate-200 flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="اسمك كطبيب متدرب..."
-                value={senderName}
-                onChange={(e) => setSenderName(e.target.value)}
-                className="w-1/3 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-900 focus:outline-none focus:border-emerald-500"
-              />
-              <span className="text-[10px] text-slate-500 truncate">التخصص: {currentSpecialtyTitle}</span>
+          {/* Chat Form Input or Disabled Notice */}
+          {chatDisabledEffective ? (
+            <div className="p-4 bg-amber-50 border-t border-amber-200 text-center space-y-1.5">
+              <div className="flex items-center justify-center gap-2 text-amber-900 font-bold text-xs">
+                <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>غرفة المحادثة معطلة حالياً</span>
+              </div>
+              <p className="text-[11px] text-amber-700 leading-relaxed max-w-sm mx-auto">
+                {disabledMessage || 'تم إيقاف المحادثة التفاعلية لهذا القسم الأكاديمي أو المجلس مؤقتاً بقرار من إدارة المنصة.'}
+              </p>
             </div>
+          ) : (
+            <form onSubmit={handleSendMessage} className="p-3 bg-white border-t border-slate-200 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="اسمك كطبيب متدرب..."
+                  value={senderName}
+                  onChange={(e) => setSenderName(e.target.value)}
+                  className="w-1/3 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-[11px] text-slate-900 focus:outline-none focus:border-emerald-500"
+                />
+                <span className="text-[10px] text-slate-500 truncate">التخصص: {currentSpecialtyTitle}</span>
+              </div>
 
-            <div className="flex items-center gap-2">
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                accept="image/*,.pdf"
-                className="hidden"
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-500 hover:text-emerald-600 rounded-xl transition-colors"
-                title="إرفاق صورة أو PDF (حتى 50MB)"
-              >
-                <Paperclip className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileChange}
+                  accept="image/*,.pdf"
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-500 hover:text-emerald-600 rounded-xl transition-colors"
+                  title="إرفاق صورة أو PDF (حتى 50MB)"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
 
-              <input
-                type="text"
-                placeholder="اكتب استفسارك أو مشاركتك الطبية..."
-                value={newMessage}
-                onChange={(e) => setNewMessage(e.target.value)}
-                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-emerald-500"
-              />
+                <input
+                  type="text"
+                  placeholder="اكتب استفسارك أو مشاركتك الطبية..."
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-emerald-500"
+                />
 
-              <button
-                type="submit"
-                disabled={isLoading || (!newMessage.trim() && !selectedFile)}
-                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white p-2.5 rounded-xl transition-colors shadow-xs"
-              >
-                <Send className="w-4 h-4 rotate-180" />
-              </button>
-            </div>
-          </form>
+                <button
+                  type="submit"
+                  disabled={isLoading || (!newMessage.trim() && !selectedFile)}
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white p-2.5 rounded-xl transition-colors shadow-xs"
+                >
+                  <Send className="w-4 h-4 rotate-180" />
+                </button>
+              </div>
+            </form>
+          )}
 
         </div>
       )}

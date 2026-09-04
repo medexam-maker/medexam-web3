@@ -67,6 +67,8 @@ export const COUNCILS: CouncilInfo[] = [
 ];
 
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
+  drSamiEnabled: true,
+  chatStatusMap: {},
   demoQuestionLimit: 5,
   examQuestionCount: 50,
   examTimerSeconds: 3600,

@@ -332,6 +332,7 @@ export default function App() {
         currentUser={currentUser}
         onOpenAuthModal={handleOpenAuthModal}
         onLogout={handleLogout}
+        drSamiEnabled={siteSettings.drSamiEnabled !== false}
       />
 
       {/* Subscription Warning Banner if expiring within 7 days */}
@@ -499,7 +500,12 @@ export default function App() {
 
               {/* Embedded Chat Widget for current specialty */}
               <div className="pt-2">
-                <SubscriberChat currentSpecialtyTitle={currentSpecialty.titleAr} />
+                <SubscriberChat
+                  currentSpecialtyTitle={currentSpecialty.titleAr}
+                  specialtyId={currentSpecialty.id}
+                  councilId={currentSpecialty.councilId}
+                  chatStatusMap={siteSettings.chatStatusMap}
+                />
               </div>
 
               <div className="flex items-center justify-between pt-4 border-t border-slate-100">
@@ -553,7 +559,12 @@ export default function App() {
 
       {/* 4. Floating Subscriber Chat Badge (Hidden on Home page, visible ONLY in specialty sections/chat) */}
       {activeTab !== 'home' && activeTab !== 'exam' && (
-        <SubscriberChat currentSpecialtyTitle={currentSpecialty.titleAr} />
+        <SubscriberChat
+          currentSpecialtyTitle={currentSpecialty.titleAr}
+          specialtyId={currentSpecialty.id}
+          councilId={currentSpecialty.councilId}
+          chatStatusMap={siteSettings.chatStatusMap}
+        />
       )}
 
       {/* 5. Modals */}
@@ -594,6 +605,7 @@ export default function App() {
       <AiChatbotModal
         isOpen={isAiChatbotModalOpen}
         onClose={() => setIsAiChatbotModalOpen(false)}
+        drSamiEnabled={siteSettings.drSamiEnabled !== false}
       />
 
       <AuthModal
@@ -656,8 +668,12 @@ export default function App() {
                 <button onClick={() => setIsCouncilNewsModalOpen(true)} className="hover:text-emerald-400 font-bold">أخبار المجالس الرسمية</button>
                 <span>•</span>
                 <button onClick={() => setIsSubscribeModalOpen(true)} className="hover:text-emerald-400">تفعيل الاشتراكات</button>
-                <span>•</span>
-                <button onClick={() => setIsAiChatbotModalOpen(true)} className="hover:text-emerald-400">د. سامي AI</button>
+                {siteSettings.drSamiEnabled !== false && (
+                  <>
+                    <span>•</span>
+                    <button onClick={() => setIsAiChatbotModalOpen(true)} className="hover:text-emerald-400">د. سامي AI</button>
+                  </>
+                )}
               </div>
             </div>
           </div>

@@ -33,6 +33,7 @@ interface HeaderProps {
   onOpenAuthModal?: (initialMode?: 'login' | 'signup') => void;
   onLogout?: () => void;
   isCompact?: boolean;
+  drSamiEnabled?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -46,7 +47,8 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   onOpenAuthModal,
   onLogout,
-  isCompact = false
+  isCompact = false,
+  drSamiEnabled = true
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const currentSpecialty = specialties.find(s => s.id === activeSpecialtyId) || specialties[0] || { id: '', titleAr: '', titleEn: '', description: '', questionCount: 0, councilId: 'medical' } as any;
@@ -334,13 +336,15 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
               )}
 
-              <button
-                onClick={() => { onSelectTab('ai'); setMobileMenuOpen(false); }}
-                className="w-full text-right p-3 rounded-xl text-emerald-800 bg-emerald-50 hover:bg-emerald-100 transition-colors flex items-center gap-2"
-              >
-                <Bot className="w-4 h-4 text-emerald-600" />
-                <span>المحاكي الذكي للتسجيل والأسئلة (د. سامي AI)</span>
-              </button>
+              {drSamiEnabled !== false && (
+                <button
+                  onClick={() => { onSelectTab('ai'); setMobileMenuOpen(false); }}
+                  className="w-full text-right p-3 rounded-xl text-emerald-800 bg-emerald-50 hover:bg-emerald-100 transition-colors flex items-center gap-2"
+                >
+                  <Bot className="w-4 h-4 text-emerald-600" />
+                  <span>المحاكي الذكي للتسجيل والأسئلة (د. سامي AI)</span>
+                </button>
+              )}
 
               {isAdmin && (
                 <button

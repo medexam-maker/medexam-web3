@@ -861,6 +861,8 @@ async function initDatabase() {
       plansStore = await loadSetting("dynamicPlans", plansStore);
       zohoMailConfig = await loadSetting("zohoMailConfig", zohoMailConfig);
       siteSettingsStore = await loadSetting("siteSettings", siteSettingsStore);
+      if (siteSettingsStore && siteSettingsStore.drSamiEnabled === undefined) siteSettingsStore.drSamiEnabled = true;
+      if (siteSettingsStore && !siteSettingsStore.chatStatusMap) siteSettingsStore.chatStatusMap = {};
       councilsStore = await loadSetting("councils", councilsStore);
       blogPostsStore = await loadSetting("blogPosts", blogPostsStore);
       operationalAdminsStore = await loadSetting("operationalAdmins", operationalAdminsStore);
@@ -3118,16 +3120,212 @@ app.post("/api/questions/:id/improve-suggestion", requireAuth, async (req, res) 
   });
 });
 
-// 3. Subscribers Group Chat & File Uploads
+// 3. Subscribers Group Chat & File Uploads (Authoritative Scoped Chat Isolation)
 const chatPollMap = new Map<string, number>();
 const MIN_POLL_INTERVAL = 35 * 1000;
+
+function isChatScopePermitted(councilId: string, specialtyId: string): boolean {
+  const map = siteSettingsStore?.chatStatusMap || {};
+  // Missing key defaults to true (map[key] !== false)
+  if (map[`council:${councilId}`] === false) return false;
+  if (map[`specialty:${specialtyId}`] === false) return false;
+  return true;
+}
+
+interface ResolvedChatIdentity {
+  isAdmin: boolean;
+  email: string;
+  fullName: string;
+  specialtyId: string;
+  councilId: string;
+  specialtyTitleAr: string;
+}
+
+interface ChatIdentitySuccess {
+  success: true;
+  identity: ResolvedChatIdentity;
+  status?: undefined;
+  code?: undefined;
+  message?: undefined;
+}
+
+interface ChatIdentityFailure {
+  success: false;
+  status: number;
+  code: string;
+  message: string;
+  identity?: undefined;
+}
+
+type ChatIdentityResult = ChatIdentitySuccess | ChatIdentityFailure;
+
+async function resolveChatIdentity(req: express.Request, requestedSpecialtyId?: string): Promise<ChatIdentityResult> {
+  const authUser = (req as any).auth || (req as any).user;
+  if (!authUser || !authUser.email) {
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "غير مصرح: يرجى تسجيل الدخول أولاً للوصول إلى غرفة المحادثة"
+    };
+  }
+
+  const email = String(authUser.email).trim().toLowerCase();
+  const isAdmin = ADMIN_EMAILS.includes(email) || 
+    Boolean(operationalAdminsStore.find(a => a.email === email && a.status === 'active')) ||
+    authUser.role === 'admin';
+
+  if (isAdmin) {
+    // Admin authorized inspection path
+    const targetSpecId = requestedSpecialtyId || 'medicine';
+    let councilId = 'medical';
+    let titleAr = targetSpecId;
+
+    if (dbPool && isDbConnected) {
+      const specRes = await executeDbQuery("SELECT council_id, title_ar FROM medical_specialties WHERE id = $1", [targetSpecId]);
+      if (specRes && specRes.rows.length > 0) {
+        councilId = specRes.rows[0].council_id;
+        titleAr = specRes.rows[0].title_ar || targetSpecId;
+      }
+    } else {
+      const foundSpec = SPECIALTIES.find(s => s.id === targetSpecId);
+      if (foundSpec) {
+        councilId = foundSpec.councilId || 'medical';
+        titleAr = foundSpec.titleAr || targetSpecId;
+      }
+    }
+
+    return {
+      success: true,
+      identity: {
+        isAdmin: true,
+        email,
+        fullName: 'إدارة المنصة',
+        specialtyId: targetSpecId,
+        councilId,
+        specialtyTitleAr: titleAr
+      }
+    };
+  }
+
+  // Normal subscriber: Strict Fail-Closed Server-Side Identity Chain
+  // Step 1: Verify user registration and subscription validity in 'users'
+  let dbUser: any = null;
+  if (dbPool && isDbConnected) {
+    const uRes = await executeDbQuery(
+      "SELECT id, full_name, is_subscribed, subscription_end FROM users WHERE LOWER(email) = $1",
+      [email]
+    );
+    if (uRes && uRes.rows.length > 0) {
+      dbUser = uRes.rows[0];
+    }
+  }
+
+  if (!dbUser) {
+    return {
+      success: false,
+      status: 403,
+      code: "USER_NOT_FOUND",
+      message: "حساب المستخدم غير مسجل بالنظام"
+    };
+  }
+
+  const endDate = dbUser.subscription_end ? new Date(dbUser.subscription_end) : null;
+  const remainingDays = endDate ? Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))) : 0;
+  const isSubscribed = Boolean(dbUser.is_subscribed) && remainingDays > 0;
+
+  if (!isSubscribed) {
+    if (endDate && remainingDays <= 0) {
+      return {
+        success: false,
+        status: 403,
+        code: "SUBSCRIPTION_EXPIRED",
+        message: "انتهت فترة اشتراكك، يرجى تجديد الاشتراك للوصول إلى غرفة المحادثة"
+      };
+    }
+    return {
+      success: false,
+      status: 403,
+      code: "SUBSCRIPTION_REQUIRED",
+      message: "غرفة النقاش متاحة للمشتركين المفعّلين فقط"
+    };
+  }
+
+  // Step 2: Authoritative specialty from latest approved subscription_requests
+  let specialtyId: string | null = null;
+  if (dbPool && isDbConnected) {
+    const subRes = await executeDbQuery(
+      "SELECT specialty_id FROM subscription_requests WHERE LOWER(user_email) = $1 AND status = 'approved' ORDER BY created_at DESC LIMIT 1",
+      [email]
+    );
+    if (subRes && subRes.rows.length > 0) {
+      specialtyId = subRes.rows[0].specialty_id;
+    }
+  } else {
+    const memSub = [...subscriptionRequests].reverse().find(s => s.userEmail.trim().toLowerCase() === email && s.status === 'approved');
+    if (memSub) specialtyId = memSub.specialtyId;
+  }
+
+  if (!specialtyId) {
+    // FAIL CLOSED: Do NOT fall back to 'medicine'
+    return {
+      success: false,
+      status: 403,
+      code: "NO_APPROVED_SPECIALTY",
+      message: "لم يتم العثور على تخصص معتمد مرتبط باشتراكك"
+    };
+  }
+
+  // Step 3: Authoritative council relationship from medical_specialties
+  let councilId: string | null = null;
+  let specialtyTitleAr = specialtyId;
+  if (dbPool && isDbConnected) {
+    const specRes = await executeDbQuery(
+      "SELECT council_id, title_ar FROM medical_specialties WHERE id = $1",
+      [specialtyId]
+    );
+    if (specRes && specRes.rows.length > 0) {
+      councilId = specRes.rows[0].council_id;
+      specialtyTitleAr = specRes.rows[0].title_ar || specialtyId;
+    }
+  }
+
+  if (!councilId) {
+    const foundSpec = SPECIALTIES.find(s => s.id === specialtyId);
+    if (foundSpec) {
+      councilId = foundSpec.councilId || null;
+      specialtyTitleAr = foundSpec.titleAr || specialtyId;
+    }
+  }
+
+  if (!councilId) {
+    // FAIL CLOSED
+    return {
+      success: false,
+      status: 403,
+      code: "UNRESOLVED_COUNCIL",
+      message: "تعذر ربط التخصص بالمجلس الطبي المعتمد"
+    };
+  }
+
+  return {
+    success: true,
+    identity: {
+      isAdmin: false,
+      email,
+      fullName: dbUser.full_name || 'طبيب متدرب',
+      specialtyId,
+      councilId,
+      specialtyTitleAr
+    }
+  };
+}
 
 app.get("/api/chat/messages", requireAuth, async (req, res) => {
   const authUser = (req as any).auth || (req as any).user;
   const since = req.query.since as string;
-  let specialtyId = req.query.specialtyId; // from client
-
   const email = String(authUser.email).trim().toLowerCase();
+
   const lastPoll = chatPollMap.get(email) || 0;
   const now = Date.now();
   if (since && now - lastPoll < MIN_POLL_INTERVAL) {
@@ -3135,40 +3333,46 @@ app.get("/api/chat/messages", requireAuth, async (req, res) => {
   }
   if (since) chatPollMap.set(email, now);
 
+  const requestedSpecialty = typeof req.query.specialtyId === 'string' ? req.query.specialtyId : undefined;
+  const authResult = await resolveChatIdentity(req, requestedSpecialty);
+  if (!authResult.success) {
+    return res.status(authResult.status).json({
+      success: false,
+      error: authResult.message,
+      code: authResult.code
+    });
+  }
+
+  const identity = authResult.identity;
+
+  // Verify permission against chatStatusMap
+  if (!identity.isAdmin && !isChatScopePermitted(identity.councilId, identity.specialtyId)) {
+    return res.status(403).json({
+      success: false,
+      error: "غرفة المحادثة الأكاديمية لهذا القسم معطلة حالياً بقرار من إدارة المنصة",
+      disabled: true,
+      code: "CHAT_DISABLED"
+    });
+  }
+
+  // Return ONLY messages belonging to the resolved Chat room
   if (dbPool && isDbConnected) {
     try {
-      // 1. Enforce Server-Side Specialty Isolation
-      const userRes = await dbPool.query("SELECT specialty_id FROM users WHERE LOWER(email) = $1", [String(authUser.email).trim().toLowerCase()]);
-      if (userRes.rows.length === 0) return res.status(403).json({ success: false, error: "User not found" });
-      
-      const userSpecialtyId = userRes.rows[0].specialty_id;
-      if (userSpecialtyId && userSpecialtyId !== specialtyId) {
-        specialtyId = userSpecialtyId;
-      }
-
-      // 2. Delta Fetching Logic
-      let query = "SELECT * FROM chat_messages";
-      const params: any[] = [];
-      
-      if (specialtyId) {
-        query += " WHERE sender_specialty = $1";
-        params.push(specialtyId);
-      } else {
-        query += " WHERE 1=1";
-      }
+      let query = "SELECT * FROM chat_messages WHERE (sender_specialty = $1 OR sender_specialty = $2)";
+      const params: any[] = [identity.specialtyId, identity.specialtyTitleAr];
 
       if (since) {
-         query += ` AND timestamp > $${params.length + 1}`;
-         params.push(since);
-      }
-      
-      query += " ORDER BY created_at ASC";
-      if (!since) {
-         query += " LIMIT 100";
+        query += ` AND timestamp > $${params.length + 1}`;
+        params.push(since);
       }
 
-      const dbRes = await dbPool.query(query, params);
-      const mapped: ChatMessage[] = dbRes.rows.map(r => ({
+      query += " ORDER BY created_at ASC";
+      if (!since) {
+        query += " LIMIT 100";
+      }
+
+      const dbRes = await executeDbQuery(query, params);
+      const mapped: ChatMessage[] = (dbRes ? dbRes.rows : []).map(r => ({
         id: r.id,
         senderName: r.sender_name,
         senderRole: r.sender_role,
@@ -3183,37 +3387,61 @@ app.get("/api/chat/messages", requireAuth, async (req, res) => {
     }
   }
 
-  // Fallback for memory store delta logic
-  let filtered = chatMessages;
-  if (specialtyId) {
-     filtered = filtered.filter(m => m.senderSpecialty === specialtyId);
-  }
+  // Memory store fallback
+  let filtered = chatMessages.filter(m => m.senderSpecialty === identity.specialtyId || m.senderSpecialty === identity.specialtyTitleAr);
   if (since) {
-     const sinceTime = new Date(since as string).getTime();
-     filtered = filtered.filter(m => new Date(m.timestamp).getTime() > sinceTime);
+    const sinceTime = new Date(since as string).getTime();
+    filtered = filtered.filter(m => new Date(m.timestamp).getTime() > sinceTime);
   }
-  res.json(filtered);
+  return res.json(filtered);
 });
 
-app.post("/api/chat/messages", async (req, res) => {
-  const { senderName, senderRole, senderSpecialty, message, attachment } = req.body;
-  if (!senderName || (!message && !attachment)) {
-    return res.status(400).json({ error: "بيانات الرسالة غير مكتملة" });
+app.post("/api/chat/messages", requireAuth, async (req, res) => {
+  const { message, attachment } = req.body || {};
+  if (!message && !attachment) {
+    return res.status(400).json({ success: false, error: "يرجى كتابة رسالة أو إرفاق ملف" });
   }
+
+  const requestedSpecialty = typeof req.body.specialtyId === 'string' ? req.body.specialtyId : undefined;
+  const authResult = await resolveChatIdentity(req, requestedSpecialty);
+  if (!authResult.success) {
+    return res.status(authResult.status).json({
+      success: false,
+      error: authResult.message,
+      code: authResult.code
+    });
+  }
+
+  const identity = authResult.identity;
+
+  // Reject before insertion if disabled
+  if (!identity.isAdmin && !isChatScopePermitted(identity.councilId, identity.specialtyId)) {
+    return res.status(403).json({
+      success: false,
+      error: "غرفة المحادثة الأكاديمية لهذا القسم معطلة حالياً بقرار من إدارة المنصة",
+      disabled: true,
+      code: "CHAT_DISABLED"
+    });
+  }
+
+  const cleanMessage = String(message || '').trim();
+  const senderRole = identity.isAdmin ? 'إدارة المنصة' : 'مشترك مفعّل';
+  const senderName = identity.isAdmin ? (req.body.senderName || 'إدارة المنصة') : identity.fullName;
+  const senderSpecialty = identity.specialtyId;
 
   const newMsg: ChatMessage = {
     id: `msg_${Date.now()}`,
     senderName,
-    senderRole: senderRole || 'طبيب متدرب',
-    senderSpecialty: senderSpecialty || 'الطب والجراحة',
-    message: message || '',
+    senderRole,
+    senderSpecialty,
+    message: cleanMessage,
     timestamp: new Date().toLocaleTimeString('ar-SD', { hour: '2-digit', minute: '2-digit' }),
     attachment: attachment || undefined
   };
 
   if (dbPool && isDbConnected) {
     try {
-      await dbPool.query(
+      await executeDbQuery(
         `INSERT INTO chat_messages (id, sender_name, sender_role, sender_specialty, message, attachment, timestamp)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [newMsg.id, newMsg.senderName, newMsg.senderRole, newMsg.senderSpecialty, newMsg.message, newMsg.attachment ? JSON.stringify(newMsg.attachment) : null, newMsg.timestamp]
@@ -3227,7 +3455,7 @@ app.post("/api/chat/messages", async (req, res) => {
   if (chatMessages.length > 100) {
     chatMessages = chatMessages.slice(-100);
   }
-  res.status(201).json(newMsg);
+  return res.status(201).json(newMsg);
 });
 
 // Auto-purge attachments route (simulate 04:00 AM Khartoum purge or manual trigger)
@@ -3261,6 +3489,14 @@ app.post("/api/chat/purge", requireAdmin, async (req, res) => {
 // 4. AI Support Chatbot - Dr. Sami (د. سامي)
 app.post("/api/ai/chat", aiChatLimiter, async (req, res) => {
   try {
+    if (siteSettingsStore && siteSettingsStore.drSamiEnabled === false) {
+      return res.status(503).json({
+        success: false,
+        error: "خدمة المستشار الطبي الذكي (د. سامي) معطلة حالياً بقرار من إدارة المنصة",
+        disabled: true
+      });
+    }
+
     const { prompt, history } = req.body;
     if (!prompt) {
       return res.status(400).json({ error: "يرجى كتابة السؤال أو الاستفسار" });
@@ -5390,6 +5626,8 @@ app.post("/api/admin/specialties/toggle", requireAdmin, async (req, res) => {
 // 11. Persistent Site Settings & Councils Endpoints
 let operationalAdminsStore: Array<{ email: string, status: 'active' | 'disabled', createdAt: number, createdBy: string, disabledAt?: number, disabledBy?: string }> = [];
 let siteSettingsStore: any = {
+  drSamiEnabled: true,
+  chatStatusMap: {},
   tickerNews: "مرحباً بكم في منصة MedExam.net - المحاكي القومي المعتمد لامتحانات رخصة ممارسة المهنة ومجالس المهن الطبية والصحية والمجلس الطبي السوداني.",
   contactEmail: "d@medexam.net",
   contactPhone: "+249912345678",

@@ -5,6 +5,7 @@ import { authFetch } from '../lib/authFetch';
 interface AiChatbotModalProps {
   isOpen: boolean;
   onClose: () => void;
+  drSamiEnabled?: boolean;
 }
 
 interface MessageItem {
@@ -12,7 +13,7 @@ interface MessageItem {
   text: string;
 }
 
-export const AiChatbotModal: React.FC<AiChatbotModalProps> = ({ isOpen, onClose }) => {
+export const AiChatbotModal: React.FC<AiChatbotModalProps> = ({ isOpen, onClose, drSamiEnabled = true }) => {
   const [messages, setMessages] = useState<MessageItem[]>([
     {
       sender: 'bot',
@@ -25,6 +26,7 @@ export const AiChatbotModal: React.FC<AiChatbotModalProps> = ({ isOpen, onClose 
   if (!isOpen) return null;
 
   const handleSend = async (textToSend?: string) => {
+    if (!drSamiEnabled) return;
     const prompt = textToSend || inputPrompt;
     if (!prompt.trim() || isLoading) return;
 
@@ -47,6 +49,12 @@ export const AiChatbotModal: React.FC<AiChatbotModalProps> = ({ isOpen, onClose 
           history: historyPayload
         })
       });
+
+      if (res.status === 503) {
+        const data = await res.json().catch(() => null);
+        setMessages(prev => [...prev, { sender: 'bot', text: data?.error || 'خدمة المستشار الطبي الذكي (د. سامي) معطلة حالياً بقرار من إدارة المنصة.' }]);
+        return;
+      }
 
       if (res.ok) {
         const data = await res.json();
@@ -98,19 +106,21 @@ export const AiChatbotModal: React.FC<AiChatbotModalProps> = ({ isOpen, onClose 
         </div>
 
         {/* Quick Prompts Bar */}
-        <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex items-center gap-2 overflow-x-auto text-xs">
-          <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span className="text-slate-500 shrink-0 text-[11px] font-bold">أسئلة مقترحة:</span>
-          {quickPrompts.map((qp, idx) => (
-            <button
-              key={idx}
-              onClick={() => handleSend(qp)}
-              className="bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 px-3 py-1 rounded-full whitespace-nowrap text-[11px] transition-colors shrink-0 border border-slate-200 font-medium"
-            >
-              {qp}
-            </button>
-          ))}
-        </div>
+        {drSamiEnabled && (
+          <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex items-center gap-2 overflow-x-auto text-xs">
+            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="text-slate-500 shrink-0 text-[11px] font-bold">أسئلة مقترحة:</span>
+            {quickPrompts.map((qp, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleSend(qp)}
+                className="bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 px-3 py-1 rounded-full whitespace-nowrap text-[11px] transition-colors shrink-0 border border-slate-200 font-medium"
+              >
+                {qp}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Chat Stream */}
         <div className="flex-1 p-5 overflow-y-auto space-y-4 bg-slate-50/50">
@@ -145,31 +155,42 @@ export const AiChatbotModal: React.FC<AiChatbotModalProps> = ({ isOpen, onClose 
           )}
         </div>
 
-        {/* Form Input */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSend();
-          }}
-          className="p-4 bg-white border-t border-slate-200 flex items-center gap-2"
-        >
-          <input
-            type="text"
-            placeholder="اسأل د. سامي عن الامتحانات، الدفع بـ بنكك، أو أي استفسار آخر..."
-            value={inputPrompt}
-            onChange={(e) => setInputPrompt(e.target.value)}
-            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs text-slate-900 focus:outline-none focus:border-emerald-500"
-          />
-
-          <button
-            type="submit"
-            disabled={isLoading || !inputPrompt.trim()}
-            className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold px-5 py-3 rounded-xl text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+        {/* Form Input or Disabled Notice */}
+        {!drSamiEnabled ? (
+          <div className="p-4 bg-amber-50 border-t border-amber-200 text-center space-y-1">
+            <div className="text-xs font-bold text-amber-900">
+              خدمة المستشار الطبي الذكي (د. سامي AI) معطلة حالياً
+            </div>
+            <p className="text-[11px] text-amber-700">
+              تم إيقاف الخدمة مؤقتاً بقرار من إدارة المنصة. يرجى التواصل مع الدعم الفني أو مراجعة الأقسام الأكاديمية.
+            </p>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSend();
+            }}
+            className="p-4 bg-white border-t border-slate-200 flex items-center gap-2"
           >
-            <span>إرسال</span>
-            <Send className="w-4 h-4 rotate-180" />
-          </button>
-        </form>
+            <input
+              type="text"
+              placeholder="اسأل د. سامي عن الامتحانات، الدفع بـ بنكك، أو أي استفسار آخر..."
+              value={inputPrompt}
+              onChange={(e) => setInputPrompt(e.target.value)}
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs text-slate-900 focus:outline-none focus:border-emerald-500"
+            />
+
+            <button
+              type="submit"
+              disabled={isLoading || !inputPrompt.trim()}
+              className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold px-5 py-3 rounded-xl text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+            >
+              <span>إرسال</span>
+              <Send className="w-4 h-4 rotate-180" />
+            </button>
+          </form>
+        )}
 
       </div>
     </div>
