@@ -60,15 +60,17 @@ export interface Question {
   councilId?: CouncilId;
   questionAr: string; // Question text (Arabic or main lead-in)
   questionEn?: string; // Question text (English translation)
-  stem?: string; // Long clinical vignette stem\n  imageUrl?: string;
+  stem?: string; // Long clinical vignette stem
+  imageUrl?: string;
+  images?: Array<{ url: string; caption?: string; display_order?: number }>;
   labTable?: Array<{ test: string; result: string; range: string; abnormal?: boolean }>; // Lab values table
   options: string[]; // Options array
   optionsEn?: string[];
   optionsAr?: string[];
   optionsPct?: number[]; // Peer response stats percentages e.g. [14, 61, 9, 16]
   correctIndex: number;
-  explanationAr: string;
-  explanationEn?: string;
+  explanationEn: string;
+  explanationAr?: string;
   explainWrong?: string[]; // Reasons why other options are wrong
   highYieldFact?: string; // Key takeaway rule
   textbookTopic?: {

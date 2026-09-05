@@ -1151,6 +1151,23 @@ export const ExamSimulator: React.FC<ExamSimulatorProps> = ({
                 </div>
               )}
 
+              {/* Clinical Findings Image (ECG, X-Ray, CT, Histology, Clinical Photo) */}
+              {(currentQ.imageUrl || (currentQ.images && currentQ.images.length > 0)) && (
+                <div className="my-3 p-2 bg-slate-50 rounded-xl border border-slate-200 flex flex-col items-center justify-center">
+                  <img
+                    src={currentQ.imageUrl || currentQ.images?.[0]?.url}
+                    alt="Clinical finding"
+                    className="max-h-80 w-auto max-w-full rounded-lg object-contain border border-slate-200 bg-white shadow-xs"
+                    loading="lazy"
+                  />
+                  {currentQ.images?.[0]?.caption && (
+                    <p className="text-xs text-slate-500 mt-1.5 text-center font-medium">
+                      {currentQ.images[0].caption}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Lab Values Table if present */}
               {currentQ.labTable && currentQ.labTable.length > 0 && (
                 <div className="my-3 border border-slate-200 rounded-xl overflow-hidden text-xs font-mono bg-white shadow-xs">

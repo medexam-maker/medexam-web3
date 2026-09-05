@@ -315,8 +315,9 @@ async function initDatabase() {
   if (dbInitPromise) return dbInitPromise;
   dbInitPromise = (async () => {
   if (!dbPool) return;
+  let client: any = null;
   try {
-    const client = await dbPool.connect();
+    client = await dbPool.connect();
     isDbConnected = true;
     console.log("Connected to PostgreSQL Database (MedExam.net Data Engine)");
 
@@ -420,9 +421,9 @@ async function initDatabase() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS import_sessions (
           id VARCHAR(64) PRIMARY KEY,
-          specialty_id VARCHAR(64) NOT NULL REFERENCES medical_specialties(id) ON DELETE CASCADE,
-          category_id VARCHAR(64) REFERENCES specialty_categories(id) ON DELETE SET NULL,
-          uploaded_by VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+          specialty_id VARCHAR(64),
+          category_id VARCHAR(64),
+          uploaded_by VARCHAR(255),
           status VARCHAR(32) DEFAULT 'staging',
           total_questions INT DEFAULT 0,
           valid_questions INT DEFAULT 0,
@@ -433,6 +434,10 @@ async function initDatabase() {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE import_sessions DROP CONSTRAINT IF EXISTS import_sessions_uploaded_by_fkey;
+      ALTER TABLE import_sessions DROP CONSTRAINT IF EXISTS import_sessions_specialty_id_fkey;
+      ALTER TABLE import_sessions ALTER COLUMN specialty_id DROP NOT NULL;
+      ALTER TABLE import_sessions ALTER COLUMN uploaded_by DROP NOT NULL;
     `);
 
     // 5. Question Images
@@ -445,9 +450,30 @@ async function initDatabase() {
           caption_en VARCHAR(255),
           modality VARCHAR(64),
           display_order INT DEFAULT 1,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          UNIQUE (question_id, display_order)
       );
     `);
+
+    // G-03: Safe check and index creation for UNIQUE (question_id, display_order)
+    try {
+      const dupCheck = await client.query(`
+        SELECT question_id, display_order, COUNT(*) as cnt
+        FROM question_images
+        GROUP BY question_id, display_order
+        HAVING COUNT(*) > 1
+      `);
+      if (dupCheck.rows && dupCheck.rows.length > 0) {
+        console.warn("WARNING: Duplicate (question_id, display_order) found in question_images table. Skipping index creation to prevent data loss.", dupCheck.rows);
+      } else {
+        await client.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_question_images_qid_order
+          ON question_images (question_id, display_order);
+        `);
+      }
+    } catch (idxErr: any) {
+      console.warn("Notice: question_images unique index check/create:", idxErr.message);
+    }
 
     // 6. Question Audit Logs
     await client.query(`
@@ -873,12 +899,15 @@ async function initDatabase() {
       console.log("Settings restore notice:", sErr.message);
     }
 
-    client.release();
     console.log("PostgreSQL isolated tables schema initialization & migration complete!");
   } catch (err: any) {
     console.error("PostgreSQL Initialization Notice (fallback to memory if offline):", err.message);
     isDbConnected = false;
     dbInitPromise = null;
+  } finally {
+    if (client) {
+      try { client.release(); } catch(e) {}
+    }
   }
   })();
   return dbInitPromise;
@@ -1083,242 +1112,20 @@ app.get("/api/admin/db-status", requireAdmin, async (req, res) => {
   }
 });
 
-// Explicit Manual DB Migration & Seeding Endpoint
+// Authoritative Database Initialization & Sync Endpoint (Safely delegates to initDatabase)
 app.post("/api/admin/init-db", requireAdmin, async (req, res) => {
-  if (!databaseUrl) {
-    return res.status(400).json({ success: false, message: "DATABASE_URL environment variable is missing" });
-  }
-
   try {
-    if (!dbPool) {
-      const isRemote = !databaseUrl.includes("localhost") && !databaseUrl.includes("127.0.0.1");
-      dbPool = new Pool({
-        connectionString: databaseUrl,
-        ssl: isRemote ? { rejectUnauthorized: false } : false,
-        max: 5,
-        connectionTimeoutMillis: 10000,
-      });
-    }
-
-    const client = await dbPool.connect();
-    isDbConnected = true;
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS questions (
-        id VARCHAR(100) PRIMARY KEY,
-        specialty_id VARCHAR(50) NOT NULL,
-        category VARCHAR(100) NOT NULL,
-        question_ar TEXT,
-        question_en TEXT NOT NULL,
-        options_en JSONB NOT NULL,
-        correct_option_index INT NOT NULL,
-        explanation_en TEXT NOT NULL,
-        reference_book VARCHAR(200),
-        difficulty VARCHAR(20) DEFAULT 'medium',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS chat_messages (
-        id VARCHAR(100) PRIMARY KEY,
-        sender_name VARCHAR(100) NOT NULL,
-        sender_role VARCHAR(100) NOT NULL,
-        sender_specialty VARCHAR(100) NOT NULL,
-        message TEXT,
-        attachment JSONB,
-        timestamp VARCHAR(50) NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS subscription_requests (
-        id VARCHAR(100) PRIMARY KEY,
-        user_name VARCHAR(100) NOT NULL,
-        user_email VARCHAR(150) NOT NULL,
-        user_phone VARCHAR(50),
-        specialty_id VARCHAR(50) NOT NULL,
-        plan_id VARCHAR(50) NOT NULL,
-        payment_method VARCHAR(50) NOT NULL,
-        receipt_url TEXT,
-        promo_code VARCHAR(50),
-        status VARCHAR(30) NOT NULL DEFAULT 'pending',
-        action_token_hash VARCHAR(128),
-        rejection_reason TEXT,
-        action_token_used BOOLEAN DEFAULT FALSE,
-        action_token_used_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      ALTER TABLE subscription_requests ADD COLUMN IF NOT EXISTS action_token_hash VARCHAR(128);
-      ALTER TABLE subscription_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
-      ALTER TABLE subscription_requests ADD COLUMN IF NOT EXISTS action_token_used BOOLEAN DEFAULT FALSE;
-      ALTER TABLE subscription_requests ADD COLUMN IF NOT EXISTS action_token_used_at TIMESTAMP;
-
-      CREATE TABLE IF NOT EXISTS promo_codes (
-        code VARCHAR(50) PRIMARY KEY,
-        plan_id VARCHAR(50) NOT NULL,
-        discount_percent INT DEFAULT 100,
-        is_used BOOLEAN DEFAULT FALSE,
-        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        email VARCHAR(255) UNIQUE NOT NULL,
-        full_name VARCHAR(255) NOT NULL,
-        phone VARCHAR(50),
-        password_hash TEXT NOT NULL,
-        is_active BOOLEAN DEFAULT false,
-        is_subscribed BOOLEAN DEFAULT false,
-        subscription_type VARCHAR(50) DEFAULT NULL,
-        subscription_start TIMESTAMP DEFAULT NULL,
-        subscription_end TIMESTAMP DEFAULT NULL,
-        last_login TIMESTAMP DEFAULT NULL,
-        created_at TIMESTAMP DEFAULT NOW(),
-        updated_at TIMESTAMP DEFAULT NOW(),
-        activation_token VARCHAR(255) DEFAULT NULL,
-        reset_token VARCHAR(255) DEFAULT NULL
-      );
-
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50);
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT false;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS is_subscribed BOOLEAN DEFAULT false;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_type VARCHAR(50);
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_start TIMESTAMP;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_end TIMESTAMP;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP;
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS activation_token VARCHAR(255);
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(255);
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
-
-      CREATE TABLE IF NOT EXISTS exam_attempts (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        exam_id VARCHAR(100),
-        exam_mode VARCHAR(50) DEFAULT 'STUDENT_TRAINING',
-        specialty_id VARCHAR(100),
-        score FLOAT DEFAULT 0,
-        time_taken INTEGER,
-        time_remaining_seconds INTEGER,
-        current_question_index INTEGER DEFAULT 0,
-        auto_next BOOLEAN DEFAULT TRUE,
-        answers JSONB DEFAULT '{}',
-        question_ids JSONB DEFAULT '[]',
-        questions_snapshot JSONB DEFAULT '[]',
-        status VARCHAR(50) DEFAULT 'in_progress',
-        proctoring_report JSONB,
-        started_at TIMESTAMP DEFAULT NOW(),
-        completed_at TIMESTAMP DEFAULT NULL,
-        last_active_at TIMESTAMP DEFAULT NOW(),
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS exam_mode VARCHAR(50) DEFAULT 'STUDENT_TRAINING';
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS questions_snapshot JSONB DEFAULT '[]';
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS current_question_index INT DEFAULT 0;
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS time_remaining_seconds INT;
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS auto_next BOOLEAN DEFAULT TRUE;
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP DEFAULT NOW();
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS question_ids JSONB DEFAULT '[]';
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS question_started_at TIMESTAMP;
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS camera_enabled BOOLEAN DEFAULT TRUE;
-      ALTER TABLE exam_attempts ADD COLUMN IF NOT EXISTS flagged_questions JSONB DEFAULT '[]';
-
-
-      CREATE TABLE IF NOT EXISTS student_question_history (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        exam_attempt_id UUID REFERENCES exam_attempts(id) ON DELETE CASCADE,
-        question_id VARCHAR(100) NOT NULL,
-        specialty_id VARCHAR(50) NOT NULL,
-        category VARCHAR(255),
-        question_order INT,
-        shown_at TIMESTAMP DEFAULT NOW(),
-        answered_at TIMESTAMP,
-        selected_answer INT,
-        is_correct BOOLEAN
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_sqh_user_spec ON student_question_history (user_id, specialty_id);
-      CREATE INDEX IF NOT EXISTS idx_sqh_user_q ON student_question_history (user_id, question_id);
-      CREATE INDEX IF NOT EXISTS idx_sqh_attempt ON student_question_history (exam_attempt_id);
-
-      CREATE TABLE IF NOT EXISTS payments (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-        user_email VARCHAR(255) NOT NULL,
-        amount DECIMAL(10,2) NOT NULL,
-        subscription_type VARCHAR(50) NOT NULL,
-        receipt_image_url TEXT,
-        payment_method VARCHAR(50) DEFAULT 'bankak',
-        status VARCHAR(50) DEFAULT 'pending',
-        admin_notes TEXT,
-        approved_by UUID REFERENCES users(id),
-        created_at TIMESTAMP DEFAULT NOW(),
-        updated_at TIMESTAMP DEFAULT NOW()
-      );
-
-      CREATE TABLE IF NOT EXISTS proctoring_reports (
-        id SERIAL PRIMARY KEY,
-        session_id VARCHAR(100) NOT NULL,
-        specialty_id VARCHAR(50) NOT NULL,
-        tab_switches INT DEFAULT 0,
-        face_loss_count INT DEFAULT 0,
-        integrity_score INT DEFAULT 100,
-        status VARCHAR(100),
-        summary_text TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      
-      CREATE TABLE IF NOT EXISTS android_releases (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        version VARCHAR(50) NOT NULL,
-        download_url TEXT NOT NULL,
-        sha256 VARCHAR(64),
-        file_size BIGINT,
-        release_notes TEXT,
-        is_published BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS app_settings (
-        key VARCHAR(100) PRIMARY KEY,
-        value JSONB NOT NULL,
-        updated_at TIMESTAMP DEFAULT NOW()
-      );
-    `);
-
-    // Seed/sync questions to both master and specialty tables
-    let seededQuestionsCount = 0;
-    
-
-    
-
-    // Seed promo codes if empty
-    const promoCountRes = await client.query("SELECT COUNT(*) FROM promo_codes");
-    if (parseInt(promoCountRes.rows[0].count, 10) === 0) {
-      for (const p of INITIAL_PROMO_CODES) {
-        await client.query(
-          `INSERT INTO promo_codes (code, plan_id, discount_percent, is_used)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (code) DO NOTHING`,
-          [p.code, p.planId, p.discountPercent, p.isUsed]
-        );
-      }
-    }
-
-    client.release();
-
+    await initDatabase();
     return res.json({
       success: true,
-      message: "Supabase database schema & isolated specialty tables initialized & seeded successfully!",
-      tablesCreated: ["users", "payments", "exam_attempts", "questions", "questions_labs", "questions_nursing", "questions_medicine", "questions_internal_medicine", "chat_messages", "subscription_requests", "promo_codes", "proctoring_reports"],
-      seededQuestionsCount
+      message: "Database schema is automatically managed via unified_question_bank. Authoritative schema verified.",
+      deprecatedNotice: "Legacy questions table creation has been safely retired in favor of unified_question_bank."
     });
   } catch (err: any) {
     return res.status(500).json({
       success: false,
       error: err.message,
-      tip: "If port 5432 failed on Serverless, try Supabase Connection Pooler URL with port 6543 (transaction mode)."
+      tip: "If connection failed on Serverless, verify database connection pooling."
     });
   }
 });
@@ -1448,22 +1255,22 @@ app.get("/api/questions", requireAuth, async (req, res) => {
 
   if (dbPool && isDbConnected) {
     try {
-      let queryStr = `SELECT * FROM unified_question_bank WHERE status != 'archived'`;
+      let queryStr = `SELECT uqb.*, (SELECT image_url FROM question_images qi WHERE qi.question_id = uqb.id LIMIT 1) as image_url FROM unified_question_bank uqb WHERE uqb.status != 'archived'`;
       const params: any[] = [];
       if (specialtyId && typeof specialtyId === 'string') {
         params.push(specialtyId);
-        queryStr += ` AND specialty_id = ${params.length}`;
+        queryStr += ` AND uqb.specialty_id = $${params.length}`;
       }
       if (category && typeof category === 'string') {
         params.push(category);
-        queryStr += ` AND category_name = ${params.length}`;
+        queryStr += ` AND uqb.category_name = $${params.length}`;
       }
 
       params.push(questionLimit);
       if (isAdmin && (req.query.mode === 'admin' || !req.query.mode)) {
-        queryStr += ` ORDER BY created_at DESC LIMIT ${params.length}`;
+        queryStr += ` ORDER BY uqb.created_at DESC LIMIT $${params.length}`;
       } else {
-        queryStr += ` ORDER BY RANDOM() LIMIT ${params.length}`;
+        queryStr += ` ORDER BY RANDOM() LIMIT $${params.length}`;
       }
 
       const dbRes = await dbPool.query(queryStr, params);
@@ -1493,6 +1300,7 @@ app.get("/api/questions", requireAuth, async (req, res) => {
           explanationEn: r.explanation_en,
           reference: r.reference_source || r.reference_book,
           difficulty: r.difficulty || 'متوسط',
+          imageUrl: r.image_url || undefined,
           labTable: typeof r.lab_table === 'string' ? JSON.parse(r.lab_table) : (r.lab_table || undefined)
         };
       });
@@ -2441,10 +2249,17 @@ app.post("/api/questions", requireAdmin, async (req, res) => {
   };
   if (dbPool && isDbConnected) {
     try {
+      const leadInAr = newQ.questionAr || newQ.questionEn || '';
+      const leadInEn = newQ.questionEn || newQ.questionAr || '';
+      const explAr = newQ.explanationAr || newQ.explanationEn || '';
+      const explEn = newQ.explanationEn || newQ.explanationAr || '';
+      const opts = JSON.stringify(newQ.options || newQ.optionsEn || newQ.optionsAr || []);
+      const optsEn = JSON.stringify(newQ.optionsEn || newQ.options || []);
+      const optsAr = JSON.stringify(newQ.optionsAr || newQ.options || []);
+
       await dbPool.query(
-        
-        `INSERT INTO unified_question_bank (id, specialty_id, category_name, lead_in_ar, lead_in_en, options, options_en, options_ar, correct_option_index, explanation_en, explanation_ar, reference_source, difficulty)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        `INSERT INTO unified_question_bank (id, specialty_id, category_name, lead_in_ar, lead_in_en, options, options_en, options_ar, correct_option_index, explanation_en, explanation_ar, reference_source, difficulty, stem_en)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          ON CONFLICT (id) DO UPDATE SET
            specialty_id = EXCLUDED.specialty_id,
            category_name = EXCLUDED.category_name,
@@ -2457,12 +2272,28 @@ app.post("/api/questions", requireAdmin, async (req, res) => {
            explanation_en = EXCLUDED.explanation_en,
            explanation_ar = EXCLUDED.explanation_ar,
            reference_source = EXCLUDED.reference_source,
-           difficulty = EXCLUDED.difficulty`,
-        [newQ.id, newQ.specialtyId, newQ.category, newQ.questionAr, newQ.questionAr, JSON.stringify(newQ.options), JSON.stringify(newQ.options), JSON.stringify(newQ.options), newQ.correctIndex, newQ.explanationAr, newQ.explanationAr, newQ.reference, newQ.difficulty]
-
+           difficulty = EXCLUDED.difficulty,
+           stem_en = EXCLUDED.stem_en`,
+        [
+          newQ.id,
+          newQ.specialtyId,
+          newQ.category || 'General',
+          leadInAr,
+          leadInEn,
+          opts,
+          optsEn,
+          optsAr,
+          newQ.correctIndex,
+          explEn,
+          explAr,
+          newQ.reference || '',
+          newQ.difficulty || 'medium',
+          newQ.stem || null
+        ]
       );
-    } catch (err) {
+    } catch (err: any) {
       console.error("PG Insert Question Error:", err.message);
+      return res.status(500).json({ success: false, error: err.message });
     }
   }
   res.status(201).json({ success: true, question: newQ });
@@ -2474,11 +2305,17 @@ app.post("/api/questions/batch", requireAdmin, async (req, res) => {
 
   let insertedCount = 0;
   let skippedDuplicates = 0;
-  const savedQuestions = [];
+  let failedCount = 0;
+  const savedQuestions: any[] = [];
+  const failedQuestions: any[] = [];
 
   for (let i = 0; i < questions.length; i++) {
     const qData = questions[i];
-    if (!qData.specialtyId || !qData.questionEn || qData.correctIndex === undefined) continue;
+    if (!qData.specialtyId || (!qData.questionEn && !qData.questionAr) || qData.correctIndex === undefined) {
+      failedCount++;
+      failedQuestions.push({ index: i, error: "Missing required fields (specialtyId, question text, or correctIndex)" });
+      continue;
+    }
 
     const newQ = {
       id: qData.id || `q_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -2487,38 +2324,67 @@ app.post("/api/questions/batch", requireAdmin, async (req, res) => {
 
     if (dbPool && isDbConnected) {
       try {
-        await dbPool.query(
-          
-        `INSERT INTO unified_question_bank (id, specialty_id, category_name, lead_in_ar, lead_in_en, options, options_en, options_ar, correct_option_index, explanation_en, explanation_ar, reference_source, difficulty)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         ON CONFLICT (id) DO UPDATE SET
-           specialty_id = EXCLUDED.specialty_id,
-           category_name = EXCLUDED.category_name,
-           lead_in_ar = EXCLUDED.lead_in_ar,
-           lead_in_en = EXCLUDED.lead_in_en,
-           options = EXCLUDED.options,
-           options_en = EXCLUDED.options_en,
-           options_ar = EXCLUDED.options_ar,
-           correct_option_index = EXCLUDED.correct_option_index,
-           explanation_en = EXCLUDED.explanation_en,
-           explanation_ar = EXCLUDED.explanation_ar,
-           reference_source = EXCLUDED.reference_source,
-           difficulty = EXCLUDED.difficulty`,
-        [newQ.id, newQ.specialtyId, newQ.category, newQ.questionAr, newQ.questionAr, JSON.stringify(newQ.options), JSON.stringify(newQ.options), JSON.stringify(newQ.options), newQ.correctIndex, newQ.explanationAr, newQ.explanationAr, newQ.reference, newQ.difficulty]
+        const leadInAr = newQ.questionAr || newQ.questionEn || '';
+        const leadInEn = newQ.questionEn || newQ.questionAr || '';
+        const explAr = newQ.explanationAr || newQ.explanationEn || '';
+        const explEn = newQ.explanationEn || newQ.explanationAr || '';
+        const opts = JSON.stringify(newQ.options || newQ.optionsEn || newQ.optionsAr || []);
+        const optsEn = JSON.stringify(newQ.optionsEn || newQ.options || []);
+        const optsAr = JSON.stringify(newQ.optionsAr || newQ.options || []);
 
+        await dbPool.query(
+          `INSERT INTO unified_question_bank (id, specialty_id, category_name, lead_in_ar, lead_in_en, options, options_en, options_ar, correct_option_index, explanation_en, explanation_ar, reference_source, difficulty, stem_en)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           ON CONFLICT (id) DO UPDATE SET
+             specialty_id = EXCLUDED.specialty_id,
+             category_name = EXCLUDED.category_name,
+             lead_in_ar = EXCLUDED.lead_in_ar,
+             lead_in_en = EXCLUDED.lead_in_en,
+             options = EXCLUDED.options,
+             options_en = EXCLUDED.options_en,
+             options_ar = EXCLUDED.options_ar,
+             correct_option_index = EXCLUDED.correct_option_index,
+             explanation_en = EXCLUDED.explanation_en,
+             explanation_ar = EXCLUDED.explanation_ar,
+             reference_source = EXCLUDED.reference_source,
+             difficulty = EXCLUDED.difficulty,
+             stem_en = EXCLUDED.stem_en`,
+          [
+            newQ.id,
+            newQ.specialtyId,
+            newQ.category || 'General',
+            leadInAr,
+            leadInEn,
+            opts,
+            optsEn,
+            optsAr,
+            newQ.correctIndex,
+            explEn,
+            explAr,
+            newQ.reference || '',
+            newQ.difficulty || 'medium',
+            newQ.stem || null
+          ]
         );
-      } catch (err) {
+        savedQuestions.push(newQ);
+        insertedCount++;
+      } catch (err: any) {
         console.error(`PG Batch Insert Error in item ${i}:`, err.message);
+        failedCount++;
+        failedQuestions.push({ index: i, id: newQ.id, error: err.message });
       }
+    } else {
+      savedQuestions.push(newQ);
+      insertedCount++;
     }
-    savedQuestions.push(newQ);
-    insertedCount++;
   }
 
   res.status(200).json({
-    success: true,
-    message: `تم حفظ الدفعة بنجاح (${insertedCount} سؤال في الجداول المخصصة)`,
+    success: failedCount === 0 || insertedCount > 0,
+    message: `تمت المعالجة: حفظ ${insertedCount} سؤال بنجاح، وفشل ${failedCount}`,
     insertedCount,
+    failedCount,
+    failedQuestions,
     skippedDuplicates,
     savedQuestions
   });
@@ -2527,33 +2393,55 @@ app.post("/api/questions/batch", requireAdmin, async (req, res) => {
 app.put("/api/questions/:id", requireAdmin, async (req, res) => {
   const { id } = req.params;
   const q: Partial<Question> = req.body;
-  const specId = q.specialtyId || 'medicine';
 
   if (dbPool && isDbConnected) {
     try {
+      const leadInAr = q.questionAr !== undefined ? q.questionAr : null;
+      const leadInEn = q.questionEn !== undefined ? q.questionEn : null;
+      const explAr = q.explanationAr !== undefined ? q.explanationAr : null;
+      const explEn = q.explanationEn !== undefined ? q.explanationEn : null;
+      const opts = q.options ? JSON.stringify(q.options) : null;
+      const optsAr = q.optionsAr ? JSON.stringify(q.optionsAr) : null;
+      const optsEn = q.optionsEn ? JSON.stringify(q.optionsEn) : null;
+      const stemEn = q.stem !== undefined ? q.stem : null;
 
-      // Update in master table
       await dbPool.query(
         `UPDATE unified_question_bank
          SET specialty_id = COALESCE($1, specialty_id),
              category_name = COALESCE($2, category_name),
              lead_in_ar = COALESCE($3, lead_in_ar),
-             lead_in_en = COALESCE($3, lead_in_en),
-             options = COALESCE($4, options),
-             correct_option_index = COALESCE($5, correct_option_index),
-             explanation_ar = COALESCE($6, explanation_ar),
-             explanation_en = COALESCE($6, explanation_en),
-             reference_source = COALESCE($7, reference_source)
-         WHERE id = $8`,
-        [q.specialtyId, q.category, q.questionAr, q.options ? JSON.stringify(q.options) : null, q.correctIndex, q.explanationAr, q.reference, id]
+             lead_in_en = COALESCE($4, lead_in_en),
+             options = COALESCE($5, options),
+             options_ar = COALESCE($6, options_ar),
+             options_en = COALESCE($7, options_en),
+             correct_option_index = COALESCE($8, correct_option_index),
+             explanation_ar = COALESCE($9, explanation_ar),
+             explanation_en = COALESCE($10, explanation_en),
+             reference_source = COALESCE($11, reference_source),
+             stem_en = COALESCE($12, stem_en)
+         WHERE id = $13`,
+        [
+          q.specialtyId || null,
+          q.category || null,
+          leadInAr,
+          leadInEn,
+          opts,
+          optsAr,
+          optsEn,
+          q.correctIndex !== undefined ? q.correctIndex : null,
+          explAr,
+          explEn,
+          q.reference || null,
+          stemEn,
+          id
+        ]
       );
-
-      
     } catch (err: any) {
       console.error("PG Update Question Error:", err.message);
+      return res.status(500).json({ success: false, error: err.message });
     }
   }
-  res.json({ success: true, message: "تم تحديث السؤال" });
+  res.json({ success: true, message: "تم تحديث السؤال بنجاح" });
 });
 
 app.delete("/api/questions/:id", requireAdmin, async (req, res) => {
@@ -4871,30 +4759,57 @@ app.post("/api/auth/register", authLimiter, async (req, res) => {
   try {
     const existing = await executeDbQuery("SELECT * FROM users WHERE LOWER(email) = $1", [cleanEmail]);
     if (existing && existing.rows.length > 0) {
-      return res.status(400).json({ success: false, error: "البريد الإلكتروني مسجل بالفعل بالموقع" });
-    }
+      const existingUser = existing.rows[0];
+      // G-04: If user was pre-created during subscription with the exact dummy hash, allow registration to set their password
+      if (existingUser.password_hash === '$2b$10$default_registered_user') {
+        const passwordHash = await bcrypt.hash(String(password), 10);
+        const updateRes = await executeDbQuery(
+          `UPDATE users
+           SET password_hash = $1,
+               full_name = COALESCE(NULLIF($2, ''), full_name),
+               phone = COALESCE(NULLIF($3, ''), phone),
+               updated_at = NOW()
+           WHERE id = $4
+           RETURNING *`,
+          [passwordHash, userName, userPhone, existingUser.id]
+        );
+        const r = updateRes && updateRes.rows.length > 0 ? updateRes.rows[0] : existingUser;
+        createdUser = {
+          id: r.id,
+          email: r.email,
+          fullName: r.full_name,
+          phone: r.phone,
+          isActive: r.is_active,
+          isSubscribed: r.is_subscribed,
+          createdAt: r.created_at
+        };
+        logSystemEvent('success', 'auth', `User ${cleanEmail} completed registration from pre-subscription state`, { userId: r.id });
+      } else {
+        return res.status(400).json({ success: false, error: "البريد الإلكتروني مسجل بالفعل بالموقع" });
+      }
+    } else {
+      const passwordHash = await bcrypt.hash(String(password), 10);
 
-    const passwordHash = await bcrypt.hash(String(password), 10);
+      const insertRes = await executeDbQuery(
+        `INSERT INTO users (email, full_name, phone, password_hash, is_active, is_subscribed, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, FALSE, FALSE, NOW(), NOW())
+         RETURNING *`,
+        [cleanEmail, userName, userPhone, passwordHash]
+      );
 
-    const insertRes = await executeDbQuery(
-      `INSERT INTO users (email, full_name, phone, password_hash, is_active, is_subscribed, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, FALSE, FALSE, NOW(), NOW())
-       RETURNING *`,
-      [cleanEmail, userName, userPhone, passwordHash]
-    );
-
-    if (insertRes && insertRes.rows.length > 0) {
-      const r = insertRes.rows[0];
-      createdUser = {
-        id: r.id,
-        email: r.email,
-        fullName: r.full_name,
-        phone: r.phone,
-        isActive: r.is_active,
-        isSubscribed: r.is_subscribed,
-        createdAt: r.created_at
-      };
-      logSystemEvent('success', 'auth', `User ${cleanEmail} registered successfully!`, { userId: r.id });
+      if (insertRes && insertRes.rows.length > 0) {
+        const r = insertRes.rows[0];
+        createdUser = {
+          id: r.id,
+          email: r.email,
+          fullName: r.full_name,
+          phone: r.phone,
+          isActive: r.is_active,
+          isSubscribed: r.is_subscribed,
+          createdAt: r.created_at
+        };
+        logSystemEvent('success', 'auth', `User ${cleanEmail} registered successfully!`, { userId: r.id });
+      }
     }
   } catch (err: any) {
     logSystemEvent('error', 'auth', `PG Register Error: ${err.message}`);
@@ -5843,7 +5758,8 @@ app.post("/api/blog", requireAdmin, async (req, res) => {
       readTime: post.readTime || '4 دقائق',
       imageUrl: post.imageUrl || 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=800&q=80',
       tags: post.tags || ['امتحانات الطبية', 'MCQ'],
-      viewsCount: 0
+      viewsCount: 0,
+      status: post.status || 'published'
     };
     blogPostsStore.unshift(newPost);
   }
@@ -6187,17 +6103,83 @@ function cleanupImportSessions() {
   }
 }
 
+async function getImportSession(sessionId: string): Promise<StagedImportSession | null> {
+  const cached = importSessions.get(sessionId);
+  if (cached) return cached;
+
+  try {
+    const res = await executeDbQuery(
+      "SELECT staged_data, created_at, invalid_questions FROM import_sessions WHERE id = $1 AND status = 'staging'",
+      [sessionId]
+    );
+    if (res.rows && res.rows.length > 0) {
+      const row = res.rows[0];
+      const data = row.staged_data || {};
+      const restored: StagedImportSession = {
+        questions: data.questions || [],
+        createdAt: data.createdAt || (new Date(row.created_at).getTime()),
+        rejectedCount: data.rejectedCount !== undefined ? data.rejectedCount : (row.invalid_questions || 0)
+      };
+      importSessions.set(sessionId, restored);
+      return restored;
+    }
+  } catch (err) {
+    console.error("Failed to load import session from database:", err);
+  }
+  return null;
+}
+
+async function persistImportSession(sessionId: string, session: StagedImportSession): Promise<void> {
+  importSessions.set(sessionId, session);
+  try {
+    const payload = JSON.stringify({
+      questions: session.questions,
+      createdAt: session.createdAt,
+      rejectedCount: session.rejectedCount
+    });
+    const firstSpec = session.questions[0]?.specialty_id || null;
+    await executeDbQuery(
+      `INSERT INTO import_sessions (id, specialty_id, uploaded_by, status, total_questions, valid_questions, invalid_questions, staged_data, created_at, updated_at)
+       VALUES ($1, $2, 'admin', 'staging', $3, $4, $5, $6::jsonb, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         specialty_id = EXCLUDED.specialty_id,
+         total_questions = EXCLUDED.total_questions,
+         valid_questions = EXCLUDED.valid_questions,
+         invalid_questions = EXCLUDED.invalid_questions,
+         staged_data = EXCLUDED.staged_data,
+         status = 'staging',
+         updated_at = NOW()`,
+      [sessionId, firstSpec, session.questions.length + session.rejectedCount, session.questions.length, session.rejectedCount, payload]
+    );
+  } catch (err) {
+    console.error("Failed to persist import session to database:", err);
+  }
+}
+
+async function markImportSessionFinished(sessionId: string, status: 'committed' | 'aborted'): Promise<void> {
+  importSessions.delete(sessionId);
+  try {
+    await executeDbQuery(
+      "UPDATE import_sessions SET status = $1, updated_at = NOW() WHERE id = $2",
+      [status, sessionId]
+    );
+  } catch (err) {
+    console.error("Failed to update import session status in database:", err);
+  }
+}
+
 app.post("/api/import/chunk", requireAdmin, async (req, res) => {
   cleanupImportSessions();
-  const { sessionId, chunkIndex, data } = req.body;
+  const sessionId = req.body.sessionId;
+  const chunkIndex = req.body.chunkIndex !== undefined ? req.body.chunkIndex : 0;
+  const data = req.body.data || req.body.questionsChunk;
   if (!sessionId || !Array.isArray(data)) {
     return res.status(400).json({ error: "Invalid payload" });
   }
 
-  let session = importSessions.get(sessionId);
+  let session = await getImportSession(sessionId);
   if (!session) {
     session = { questions: [], createdAt: Date.now(), rejectedCount: 0 };
-    importSessions.set(sessionId, session);
   }
 
   const accepted = [];
@@ -6216,13 +6198,33 @@ app.post("/api/import/chunk", requireAdmin, async (req, res) => {
   for (let i = 0; i < data.length; i++) {
     const q = data[i];
     
+    // Normalize fields
+    const specialty_id = q.specialty_id || (q.specialty_name ? String(q.specialty_name).toLowerCase() : undefined);
+    const lead_in_en = q.lead_in_en || q.question_en || q.question_text || '';
+    const lead_in_ar = q.lead_in_ar || q.question_ar || '';
+    const options = Array.isArray(q.options) && q.options.length > 0 ? q.options : (Array.isArray(q.options_en) ? q.options_en : []);
+    const options_ar = Array.isArray(q.options_ar) ? q.options_ar : [];
+    const options_en = Array.isArray(q.options_en) ? q.options_en : options;
+    const explanation_en = q.explanation_en || q.explanation || '';
+    const explanation_ar = q.explanation_ar || q.explanation || '';
+    
+    let correct_option_index = q.correct_option_index;
+    if (correct_option_index == null && q.correct_answer != null) {
+      const ca = String(q.correct_answer).trim().toUpperCase();
+      if (['A', 'B', 'C', 'D', 'E'].includes(ca)) {
+        correct_option_index = ca.charCodeAt(0) - 65;
+      } else if (!isNaN(Number(ca))) {
+        correct_option_index = Number(ca);
+      }
+    }
+
     // Mandatory fields check: specialty_id, lead_in_en, options array, correct_option_index, explanation_en
-    if (!q.specialty_id || !q.lead_in_en || !Array.isArray(q.options) || q.correct_option_index == null || typeof q.correct_option_index !== 'number' || !q.explanation_en) {
+    if (!specialty_id || !lead_in_en || !Array.isArray(options) || options.length < 2 || correct_option_index == null || typeof correct_option_index !== 'number' || !explanation_en) {
       rejected.push({ index: i, reason: "Missing required fields (specialty_id, lead_in_en, options, correct_option_index, explanation_en)" });
       continue;
     }
 
-    const fingerprintStr = `${q.specialty_id}|${q.lead_in_en.trim().toLowerCase()}`;
+    const fingerprintStr = `${specialty_id}|${lead_in_en.trim().toLowerCase()}`;
     const fingerprint_hash = crypto.createHash('sha256').update(fingerprintStr).digest('hex');
 
     if (existingFingerprints.has(fingerprint_hash)) {
@@ -6237,18 +6239,32 @@ app.post("/api/import/chunk", requireAdmin, async (req, res) => {
     }
 
     const qId = crypto.randomUUID();
-    const stagedQ = { ...q, id: qId, fingerprint_hash };
+    const stagedQ = {
+      ...q,
+      id: qId,
+      specialty_id,
+      lead_in_en,
+      lead_in_ar,
+      options,
+      options_en,
+      options_ar,
+      correct_option_index,
+      explanation_en,
+      explanation_ar,
+      fingerprint_hash
+    };
     session.questions.push(stagedQ);
     accepted.push(stagedQ);
   }
   
   session.rejectedCount += rejected.length;
-  return res.json({ success: true, chunkIndex, accepted: accepted.length, rejected });
+  await persistImportSession(sessionId, session);
+  return res.json({ success: true, sessionId, chunkIndex, accepted: accepted.length, rejected });
 });
 
 app.get("/api/import/preview/:sessionId", requireAdmin, async (req, res) => {
   cleanupImportSessions();
-  const session = importSessions.get(req.params.sessionId);
+  const session = await getImportSession(req.params.sessionId);
   if (!session) {
     return res.status(404).json({ error: "Session not found or expired" });
   }
@@ -6266,7 +6282,7 @@ app.post("/api/import/commit", requireAdmin, async (req, res) => {
   if (!confirm) {
     return res.status(400).json({ error: "Confirmation required" });
   }
-  const session = importSessions.get(sessionId);
+  const session = await getImportSession(sessionId);
   if (!session) {
     return res.status(404).json({ error: "Session not found or expired" });
   }
@@ -6286,10 +6302,13 @@ app.post("/api/import/commit", requireAdmin, async (req, res) => {
           await client.query(`SAVEPOINT ${spName}`);
           const category = q.category || q.category_name || 'General';
           const leadInAr = q.lead_in_ar || '';
+          const explAr = q.explanation_ar || '';
+          const optsEn = JSON.stringify(q.options_en || q.options);
+          const optsAr = JSON.stringify(q.options_ar || q.options);
           
           await client.query(
-            "INSERT INTO unified_question_bank (id, specialty_id, category_name, lead_in_ar, lead_in_en, options, correct_option_index, reference_source, explanation_en, fingerprint_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-            [q.id, q.specialty_id, category, leadInAr, q.lead_in_en, JSON.stringify(q.options), q.correct_option_index, q.reference_source || '', q.explanation_en, q.fingerprint_hash]
+            "INSERT INTO unified_question_bank (id, specialty_id, category_name, lead_in_ar, lead_in_en, options, options_en, options_ar, correct_option_index, reference_source, explanation_en, explanation_ar, fingerprint_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+            [q.id, q.specialty_id, category, leadInAr, q.lead_in_en, JSON.stringify(q.options), optsEn, optsAr, q.correct_option_index, q.reference_source || '', q.explanation_en, explAr, q.fingerprint_hash]
           );
           await client.query(`RELEASE SAVEPOINT ${spName}`);
           success = true;
@@ -6301,7 +6320,7 @@ app.post("/api/import/commit", requireAdmin, async (req, res) => {
       }
     }
     await client.query("COMMIT");
-    importSessions.delete(sessionId);
+    await markImportSessionFinished(sessionId, 'committed');
     return res.json({ success: true, inserted: session.questions.length });
   } catch (err: any) {
     await client.query("ROLLBACK");
@@ -6314,7 +6333,7 @@ app.post("/api/import/commit", requireAdmin, async (req, res) => {
 app.post("/api/import/abort", requireAdmin, async (req, res) => {
   cleanupImportSessions();
   const { sessionId } = req.body;
-  importSessions.delete(sessionId);
+  await markImportSessionFinished(sessionId, 'aborted');
   return res.json({ success: true });
 });
 

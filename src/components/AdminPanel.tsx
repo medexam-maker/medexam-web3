@@ -164,10 +164,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [qCouncilId, setQCouncilId] = useState<CouncilId>('medical');
   const [qCategory, setQCategory] = useState('الباطنية - العامة');
   const [qText, setQText] = useState('');
+  const [qTextEn, setQTextEn] = useState('');
   const [qStem, setQStem] = useState('');
   const [qOptions, setQOptions] = useState<string[]>(['', '', '', '']);
   const [qCorrectIndex, setQCorrectIndex] = useState(0);
   const [qExplanation, setQExplanation] = useState('');
+  const [qExplanationEn, setQExplanationEn] = useState('');
   const [qDifficulty, setQDifficulty] = useState<'سهل' | 'متوسط' | 'متقدم'>('متوسط');
   const [qReference, setQReference] = useState('');
   const [qImageUrl, setQImageUrl] = useState('');
@@ -339,24 +341,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleSaveQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!qText.trim() || qOptions.some(o => !o.trim())) {
+    const effectiveQuestionText = qTextEn.trim() || qText.trim();
+    if (!effectiveQuestionText || qOptions.some(o => !o.trim())) {
       alert('يرجى كتابة السؤال وجميع الخيارات الأربعة.');
       return;
     }
+
+    const effectiveQuestionEn = qTextEn.trim() || qText.trim();
+    const effectiveQuestionAr = qText.trim() || qTextEn.trim();
+    const effectiveExplanationEn = qExplanationEn.trim() || qExplanation.trim();
+    const effectiveExplanationAr = qExplanation.trim() || qExplanationEn.trim();
 
     const payload = {
       specialtyId: qSpecialtyId,
       councilId: qCouncilId,
       category: qCategory,
-      questionAr: qText,
+      questionEn: effectiveQuestionEn,
+      questionAr: effectiveQuestionAr,
       stem: qStem,
       options: qOptions,
+      optionsEn: qOptions,
+      optionsAr: qOptions,
       correctIndex: qCorrectIndex,
-      explanationAr: qExplanation,
+      explanationEn: effectiveExplanationEn,
+      explanationAr: effectiveExplanationAr,
       difficulty: qDifficulty,
       reference: qReference,
-        imageUrl: qImageUrl,
-      lang: /[a-zA-Z]/.test(qText) ? 'en' : 'ar'
+      imageUrl: qImageUrl,
+      lang: /[a-zA-Z]/.test(effectiveQuestionEn) ? 'en' : 'ar'
     };
 
     try {
@@ -714,8 +726,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
       
       const pairedData = Array.from(pairedQuestions.values());
-      const totalQuestions = pairedData.length;
 
+      const currentSessionId = 'import_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      setImportSessionId(currentSessionId);
+
+      // Normalize paired questions to match canonical import contract
+      const normalizedData = pairedData.map(pq => {
+        let corrIdx = 0;
+        const ca = String(pq.correct_answer || 'A').trim().toUpperCase();
+        if (['A', 'B', 'C', 'D', 'E'].includes(ca)) {
+          corrIdx = ca.charCodeAt(0) - 65;
+        } else if (!isNaN(Number(ca))) {
+          corrIdx = Number(ca);
+        }
+
+        const matchedSpec = specialties.find(s => 
+          s.id.toLowerCase() === String(pq.specialty_name || '').toLowerCase() ||
+          s.titleEn.toLowerCase() === String(pq.specialty_name || '').toLowerCase() ||
+          s.titleAr === pq.specialty_name
+        );
+        const specId = matchedSpec ? matchedSpec.id : (pq.specialty_name ? String(pq.specialty_name).toLowerCase() : 'medicine');
+
+        return {
+          specialty_id: specId,
+          category_name: pq.category_name || 'General',
+          lead_in_en: pq.question_en || pq.question_text || '',
+          lead_in_ar: pq.question_ar || pq.question_text || '',
+          options: (pq.options_en && pq.options_en.length > 0) ? pq.options_en : (pq.options || []),
+          options_en: (pq.options_en && pq.options_en.length > 0) ? pq.options_en : (pq.options || []),
+          options_ar: (pq.options_ar && pq.options_ar.length > 0) ? pq.options_ar : (pq.options || []),
+          correct_option_index: corrIdx,
+          explanation_en: pq.explanation_en || pq.explanation || 'No rationale provided',
+          explanation_ar: pq.explanation_ar || pq.explanation || '',
+          reference_source: pq.reference || '',
+          lab_markdown: pq.lab_markdown || ''
+        };
+      });
+
+      const totalQuestions = normalizedData.length;
       const BATCH_SIZE = 15;
       const totalBatches = Math.ceil(totalQuestions / BATCH_SIZE);
 
@@ -729,11 +777,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         statusText: `جاري رفع ${totalQuestions} سؤال عبر ${totalBatches} دفعات...`
       });
 
-      let currentSessionId: string | null = null;
-      let allValid = true;
-
       for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
-        const chunk = jsonData.slice(batchIdx * BATCH_SIZE, (batchIdx + 1) * BATCH_SIZE);
+        const chunk = normalizedData.slice(batchIdx * BATCH_SIZE, (batchIdx + 1) * BATCH_SIZE);
         const currentBatchNumber = batchIdx + 1;
 
         setUploadProgress(prev => ({
@@ -743,8 +788,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         }));
 
         const payload = {
-           questionsChunk: chunk,
            sessionId: currentSessionId,
+           chunkIndex: batchIdx,
+           data: chunk,
+           questionsChunk: chunk,
            isFinal: batchIdx === totalBatches - 1
         };
 
@@ -762,11 +809,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const data = await res.json();
         if (!data.success) {
           throw new Error(data.error || 'Server rejected the chunk.');
-        }
-
-        if (data.sessionId) {
-          currentSessionId = data.sessionId;
-          setImportSessionId(data.sessionId);
         }
 
         const processedCount = Math.min((batchIdx + 1) * BATCH_SIZE, totalQuestions);
@@ -902,6 +944,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           questionAr: qStr,
           options: opts.slice(0, 4),
           correctIndex: correctIdx,
+          explanationEn: expStr || 'Standard medical rationale provided for board review.',
           explanationAr: expStr || 'Standard medical rationale provided for board review.',
           difficulty: 'متوسط',
           reference: refStr || 'Sudanese Board Standard References',
@@ -1161,7 +1204,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             onClick={() => {
               setEditingQuestion(null);
               setQText('');
+              setQTextEn('');
+              setQStem('');
               setQExplanation('');
+              setQExplanationEn('');
+              setQImageUrl('');
+              setQOptions(['', '', '', '']);
+              setQCorrectIndex(0);
               if (selectedDeptFilter !== 'all') {
                 setQSpecialtyId(selectedDeptFilter as SpecialtyId);
               }
@@ -1687,11 +1736,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             setQSpecialtyId(q.specialtyId);
                             setQCouncilId(q.councilId || 'medical');
                             setQCategory(q.category);
-                            setQText(q.questionAr);
+                            setQText(q.questionAr || q.questionEn || '');
+                            setQTextEn(q.questionEn || '');
                             setQStem(q.stem || '');
                             setQOptions(q.options);
                             setQCorrectIndex(q.correctIndex);
-                            setQExplanation(q.explanationAr);
+                            setQExplanation(q.explanationAr || q.explanationEn || '');
+                            setQExplanationEn(q.explanationEn || '');
                             setQDifficulty(q.difficulty);
                             setQReference(q.reference || '');
                             setQImageUrl(q.imageUrl || '');
@@ -3039,15 +3090,27 @@ Reference: Oxford Handbook of Clinical Medicine`}
               </div>
 
               <div>
-                <label className="block text-slate-600 mb-1 font-bold">نص السؤال المطلوب (English Question Prompt) *</label>
+                <label className="block text-slate-600 mb-1 font-bold">نص السؤال بالإنجليزية (English Question Prompt) *</label>
                 <textarea
                   required
                   rows={2}
                   placeholder="Which of the following is the most immediate appropriate initial management strategy?"
-                  value={qText}
-                  onChange={(e) => setQText(e.target.value)}
+                  value={qTextEn}
+                  onChange={(e) => setQTextEn(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none focus:border-emerald-500 font-sans text-left"
                   dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 mb-1 font-bold">نص السؤال بالعربية (Arabic Question Prompt - اختياري):</label>
+                <textarea
+                  rows={2}
+                  placeholder="ما هو الإجراء الأولي الأنسب في هذه الحالة؟"
+                  value={qText}
+                  onChange={(e) => setQText(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none focus:border-emerald-500 font-sans text-right"
+                  dir="rtl"
                 />
               </div>
 
@@ -3082,15 +3145,27 @@ Reference: Oxford Handbook of Clinical Medicine`}
               </div>
 
               <div>
-                <label className="block text-slate-600 mb-1 font-bold">الشرح والتفسير الطبي (Medical Rationale) *</label>
+                <label className="block text-slate-600 mb-1 font-bold">الشرح والتفسير الطبي بالإنجليزية (English Medical Rationale) *</label>
                 <textarea
                   required
                   rows={3}
                   placeholder="Detailed English medical rationale explaining why the option is correct..."
-                  value={qExplanation}
-                  onChange={(e) => setQExplanation(e.target.value)}
+                  value={qExplanationEn}
+                  onChange={(e) => setQExplanationEn(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none focus:border-emerald-500 text-left font-sans"
                   dir="ltr"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-600 mb-1 font-bold">الشرح والتفسير الطبي بالعربية (Arabic Rationale - اختياري):</label>
+                <textarea
+                  rows={2}
+                  placeholder="شرح إضافي باللغة العربية..."
+                  value={qExplanation}
+                  onChange={(e) => setQExplanation(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none focus:border-emerald-500 text-right font-sans"
+                  dir="rtl"
                 />
               </div>
 

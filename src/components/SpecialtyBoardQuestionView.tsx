@@ -645,6 +645,23 @@ export const SpecialtyBoardQuestionView: React.FC<SpecialtyBoardQuestionViewProp
         </div>
       )}
 
+      {/* 2b. Clinical Findings Image (ECG, X-Ray, CT, Histology, Clinical Photo) */}
+      {(question.imageUrl || (question.images && question.images.length > 0)) && (
+        <div className="my-2 p-2 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col items-center justify-center">
+          <img 
+            src={question.imageUrl || question.images?.[0]?.url} 
+            alt="Clinical finding" 
+            className="max-h-96 w-auto max-w-full rounded-xl object-contain border border-slate-200 bg-white shadow-xs" 
+            loading="lazy"
+          />
+          {question.images?.[0]?.caption && (
+            <p className="text-xs text-slate-500 mt-2 text-center font-medium">
+              {question.images[0].caption}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* 3. Lab Values Table */}
       {question.labTable && question.labTable.length > 0 && (
         <LabValuesTable rows={question.labTable} />

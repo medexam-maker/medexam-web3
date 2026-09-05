@@ -11,6 +11,7 @@ export interface BlogPost {
   imageUrl: string;
   tags: string[];
   viewsCount?: number;
+  status?: 'published' | 'draft';
 }
 
 export const INITIAL_BLOG_POSTS: BlogPost[] = [
@@ -19,6 +20,7 @@ export const INITIAL_BLOG_POSTS: BlogPost[] = [
     slug: '5-tips-pass-sudanese-medical-council-exam',
     title: '5 نصائح ذهبية لاجتياز امتحان المجلس الطبي السوداني من أول محاولة',
     excerpt: 'دليل عملي شامل يتضمن أفضل الاستراتيجيات والأساليب العلمية لإدارة الوقت والتعامل مع أسئلة الخيارات المتعددة (MCQ) في امتحانات رخصة ممارسة الطب البشري.',
+    status: 'published',
     content: `
 ### مقدمة عن امتحان المجلس الطبي السوداني
 
@@ -106,13 +108,15 @@ export const INITIAL_BLOG_POSTS: BlogPost[] = [
     readTime: '6 دقائق',
     imageUrl: 'https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?auto=format&fit=crop&w=800&q=80',
     tags: ['SMSB', 'الباطنية', 'مجلس التخصصات', 'Internal Medicine', 'امتحانات الزمالة'],
-    viewsCount: 980
+    viewsCount: 980,
+    status: 'published'
   },
   {
     id: 'post-3',
     slug: 'medical-lab-council-exam-preparation',
     title: 'كيف تتفوق في امتحان مجلس المهن الطبية والصحية - قسم المختبرات الطبية',
     excerpt: 'شرح مفصل لطبيعة امتحانات مزاولة مهنة المختبرات الطبية في فروع أمراض الدم، الكيمياء السريرية، الطفيليات، والمايكروبيولوجي.',
+    status: 'published',
     content: `
 ### امتحان المختبرات الطبية الموحد (Medical Laboratory Council Exam)
 
@@ -153,6 +157,7 @@ export const INITIAL_BLOG_POSTS: BlogPost[] = [
     slug: 'success-story-sudanese-doctors-licensing',
     title: 'قصة نجاح: كيف احتل الدكتور عمر المركز الأول في امتحان المجلس الطبي القومي',
     excerpt: 'تجربة حية ملهمة يرويها أحد أوائل الممتحنين، يوضح فيها جدول المذاكرة اليومي، وكيف ساهم الحفظ بالأسئلة المشروحة في الوصول للنتيجة القومية.',
+    status: 'published',
     content: `
 ### من التردد إلى التميز والقائمة الذهبية
 
